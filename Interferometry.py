@@ -104,7 +104,20 @@ class Interferometer():
             
         for u in self.Low:
             Olow=BCH4(u.H*(I/hbar*u.time), Olow).simplify()
-        return BCH4(Olow, Oup).simplify()
+            
+            
+            OpEx_res=BCH4(Olow, Oup).simplify()
+            a_res=OpEx_res.a
+            b_res=OpEx_res.b
+            c_res=OpEx_res.c
+            d_res=OpEx_res.d
+            e_res=OpEx_res.e
+            res_dic = { 'p2':    a_res,
+                        'p':     b_res,
+                        'px_xp': c_res,
+                        'x':     d_res,
+                        'const': e_res }                 
+        return (res_dic, OpEx_res)
 
 
         
