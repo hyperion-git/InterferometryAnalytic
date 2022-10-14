@@ -101,13 +101,13 @@ class Interferometer():
         Olow=OpEx([0,0,0,0,0,0])
         
         for u in self.Up:
-            Oup=BCH4(Oup,u.H*(-I/hbar*u.time)).simplify()
+            Oup=BCHN(Oup,u.H*(-I/hbar*u.time)).simplify()
             
         for u in self.Low:
-            Olow=BCH4(u.H*(I/hbar*u.time), Olow).simplify()
+            Olow=BCHN(u.H*(I/hbar*u.time), Olow).simplify()
             
             
-            OpEx_res=BCH4(Olow, Oup).simplify()
+            OpEx_res=BCHN(Olow, Oup).simplify()
             a_res=OpEx_res.a
             b_res=OpEx_res.b
             c_res=OpEx_res.c
@@ -162,26 +162,125 @@ def BCH4(X,Y):
         Input: X,Y: Operator expression
         Output: Operator expression for Z(X,Y)'''
     E1=X+Y
-    E2=C(X,Y)
-    E3=C(X,E2)
-    E4=C(Y,E2)
-    E5=C(Y,E3)
-    return E1+E2*sy.Rational('1/2')+(E3+E4*(-1))*sy.Rational('1/12')+E5*sy.Rational('-1/24')
+    E2xy=C(X,Y)
+    E3x=C(X,E2)
+    E3y=C(Y,E2)
+    E4=C(X,E3y)
+    return E1+E2xy*sy.Rational('1/2')+(E3x+E3y*(-1))*sy.Rational('1/12')+E4*sy.Rational('-1/24')
 
 
-def BCH6(X,Y):
-    '''Computes the BCH to 6th order for two operator expression objects X and Y
+def BCHN(X,Y,nOrder=7):
+    '''Computes the BCH up to 6th order for two operator expression objects X and Y
         exp(X)*exp(Y)=exp(Z(X,Y)).
         Input: X,Y: Operator expression
         Output: Operator expression for Z(X,Y)'''
-    # Implement this...
-    E1=X+Y
-    E2=C(X,Y)
-    E3=C(X,E2)
-    E4=C(Y,E2)
-    E5=C(Y,E3)
-    E6=C(Y,E3)
+    
+    # Implement this to order 10
+    # https://link.springer.com/article/10.1007/s00009-020-01681-6    
+    if nOrder >= 1:
+        # do nothing here
+        E1=X+Y
+        phi1=E1
+        phiTemp=phi1
+    if nOrder >= 2:
+        E2xy=C(X,Y)
+        phi2=E2xy*sy.Rational('1/2')
+        phiTemp=phiTemp+phi2
+    if nOrder >= 3:
+        E3xxy=C(X,E2xy)
+        E3yxy=C(Y,E2xy)
+        phi3=(E3xxy+E3yxy*(-1))*sy.Rational('1/12')
+        phiTemp=phiTemp+phi3
+    if nOrder >= 4:
+        E4xyxy=C(X,E3yxy)
+        phi4=E4xyxy*sy.Rational('-1/24')
+        phiTemp=phiTemp+phi4
+    if nOrder >= 5:
+        E5xxxxy=C(X,C(X,E3xxy))
+        E5xyxxy=C(X,C(Y,E3xxy))
+        E5xyyxy=C(X,C(Y,E3yxy))
+        E5yxxxy=C(Y,C(X,E3xxy))
+        E5yyxxy=C(Y,C(Y,E3xxy))
+        E5yyyxy=C(Y,C(Y,E3yxy))
+        
+        phi5a=(E5xyyxy*(-1)+E5yxxxy)*sy.Rational('1/360')
+        phi5b=(E5xyxxy*(-1)+E5yyxxy)*sy.Rational('1/120')
+        phi5c=(E5xxxxy*(-1)+E5yyyxy)*sy.Rational('1/720')
+        phiTemp=phiTemp+phi5a+phi5b+phi5c
+        
+    if nOrder >= 6:
+        E6xxyyxy=C(X,E5xyyxy)
+        E6xyyxxy=C(X,E5yyxxy)
+        E6xyyyxy=C(X,E5yyyxy)
+        E6yxxxxy=C(Y,E5xxxxy)
+        
+        phiTemp=phiTemp+E6xxyyxy*sy.Rational('-1/720')+E6xyyxxy*sy.Rational('1/240')+(E6xyyyxy+E6yxxxxy)*sy.Rational('1/1440')
+   
+    if nOrder >=7:
+        # Order 7 needs to be checked... we need a better way to implement higher orders...
+        # However, we still want to reuse commutators!
+        E6xxxxxy=C(X,E5xxxxy)
+        E6xyxxxy=C(X,E5yxxxy)
+        
+        # E7xxxxxxy=C(X,E6xxxxxy) # 1/30240 A
+        # E7xxyxxxy=C(X,E6xyxxxy) # 1/5040
+        # E7xxyyxxy=C(X,E6xyyxxy)     #-1/10080
+       
+        # E7xyxxxxy=C(X,E6yxxxxy)       #1/10080
+        # E7xyxyxxy=C(X,C(Y,E5xyxxy))   #1/1008
+        # E7xyxyyxy=C(X,C(Y,E5xyyxy))   #1/5040
+        
+        # E7xyyxxxy=C(X,C(Y,E5yxxxy)) #-1/7560
+        # E7xyyyxxy=C(X,C(Y,E5yyxxy)) #1/3360
+        # E7xyyyyxy=C(X,C(Y,E5yyyxy)) #1/10080
+        
+        # E7yxxxxxy=C(Y,E6xxxxxy) #-1/10080 A
+        # E7yxyxxxy=C(Y,E6xyxxxy) #-1/1260
+        # E7yxyyxxy=C(Y,E6xyyxxy) #-1/1680
+        
+        # E7yyxxxxy=C(Y,E6yxxxxy)     #1/3360
+        # E7yyxyxxy=C(Y,C(Y,E5xyxxy)) #-1/3360
+        # E7yyxyyxy=C(Y,C(Y,E5xyyxy)) #-1/2520
+        
+        # E7yyyxxxy=C(Y,C(Y,E5yxxxy)) #1/7560
+        # E7yyyyxxy=C(Y,C(Y,E5yyxxy)) #1/10080
+        # E7yyyyyxy=C(Y,C(Y,E5yyyxy)) #-1/30240
 
+        E7xyxyxxy=C(X,C(Y,E5xyxxy))   # 1/1008
+        E7yxyxxxy=C(Y,E6xyxxxy)       #-1/1260
+        E7yxyyxxy=C(Y,E6xyyxxy)       #-1/1680
+        E7yyxyyxy=C(Y,C(Y,E5xyyxy))   #-1/2520
+
+        E7xyyyxxy=C(X,C(Y,E5yyxxy))   # 1/3360
+        E7yyxxxxy=C(Y,E6yxxxxy)       # 1/3360
+        E7yyxyxxy=C(Y,C(Y,E5xyxxy))   #-1/3360
+
+        E7xxyxxxy=C(X,E6xyxxxy)       # 1/5040
+        E7xyxyyxy=C(X,C(Y,E5xyyxy))   # 1/5040
+
+        E7xyyxxxy=C(X,C(Y,E5yxxxy))   #-1/7560
+        E7yyyxxxy=C(Y,C(Y,E5yxxxy))   # 1/7560
+
+        E7xyyyyxy=C(X,C(Y,E5yyyxy)) #  1/10080
+        E7yyyyxxy=C(Y,C(Y,E5yyxxy)) #  1/10080
+        E7xyxxxxy=C(X,E6yxxxxy)     #  1/10080
+        E7yxxxxxy=C(Y,E6xxxxxy)     # -1/10080
+        E7xxyyxxy=C(X,E6xyyxxy)     # -1/10080
+
+        E7xxxxxxy=C(X,E6xxxxxy)     #  1/30240
+        E7yyyyyxy=C(Y,C(Y,E5yyyxy)) # -1/30240
+
+        phi7a=E7xyxyxxy*sy.Rational('1/1008')+E7yxyxxxy*sy.Rational('-1/1260')+E7yxyyxxy*sy.Rational('-1/1680')+E7yyxyyxy*sy.Rational('-1/2520')
+        phi7b=(E7xyyyxxy+E7yyxxxxy+E7yyxyxxy*(-1))*sy.Rational('1/3360')
+        phi7c=(E7xxyxxxy+E7xyxyyxy)*sy.Rational('1/5040')
+        phi7d=(E7xyyxxxy*(-1)+E7yyyxxxy)*sy.Rational('1/7560')
+        phi7e=(E7xyyyyxy+E7yyyyxxy+E7xyxxxxy+(E7yxxxxxy+E7xxyyxxy)*(-1))*sy.Rational('1/10080')
+        phi7f=(E7xxxxxxy+E7yyyyyxy*(-1))*sy.Rational('1/30240')
+
+        phi7=phi7a+phi7b+phi7c+phi7d+phi7e+phi7f
+        phiTemp=phiTemp+phi7
+    
+    return phiTemp
 
 
 
