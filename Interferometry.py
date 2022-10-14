@@ -145,6 +145,7 @@ def C(OpEx1, OpEx2):
     e2=OpEx2.e
     f2=OpEx2.f
     
+    # Get someone to check this for typos
     aI= 4*I*hbar*(a2*c1-a1*c2)                  # p**p
     bI= 2*I*hbar*(b2*c1-b1*c2+a2*d1-a1*d2)      # p
     cI= 2*I*hbar*(a2*f1-a1*f2)                  # px_xp
@@ -173,6 +174,7 @@ def BCH6(X,Y):
         exp(X)*exp(Y)=exp(Z(X,Y)).
         Input: X,Y: Operator expression
         Output: Operator expression for Z(X,Y)'''
+    # Implement this...
     E1=X+Y
     E2=C(X,Y)
     E3=C(X,E2)
