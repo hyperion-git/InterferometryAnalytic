@@ -24,7 +24,8 @@ class OpEx():
         p=sy.symbols('\hat{p}')
         px_xp=sy.symbols('(\hat{p}\hat{x}+\hat{x}\hat{p})')
         x=sy.symbols('\hat{x}')
-        display(self.a*p**2+self.b*p+self.c*px_xp+self.d*x+self.f*x**2+self.e)
+        qid=sy.symbols('\hat{1}')
+        display(self.a*p**2+self.b*p+self.c*px_xp+self.d*x+self.f*x**2+self.e*qid)
         return ''
         
     def __add__(self, other):
@@ -45,7 +46,7 @@ class OpEx():
 
 class Hamiltonian(OpEx):
     '''Class to represent a Hamiltonian.
-    Input: list [a,b,c,d,e] representing the Hamiltonian H=ap^2 + b*p +c(px+xp) + d*x + e + f*x^2.,
+    Input: list [a,b,c,d,e,f] representing the Hamiltonian H=ap^2 + b*p +c(px+xp) + d*x + e + f*x^2.,
     parameters are sympy or numpy variables'''
     def __init__(self, param):
         super().__init__(param)
@@ -87,39 +88,42 @@ class U():
 class Interferometer():
     '''Class for an interferometer
     Input: UpperSequence, LowerSequence: list of Hamiltonian and Pulse objects'''
-    def __init__(self, UpperSequence, LowerSequence):
+    def __init__(self, UpperSequence, LowerSequence, BCHOrder=8):
         '''UpperSequence, LowerSequence: List of Pulse and U objects denoting the sequence
            ordering: In the correct way the time evolution operators are writen down for the full time evolution'''
-        self.Up=UpperSequence
-        self.Low=LowerSequence
+        self.Upper=UpperSequence
+        self.Lower=LowerSequence
+        self.UpperSequenceLength=len(UpperSequence)
+        self.LowerSqeuenceLength=len(LowerSequence)
+        self.BCHExpansionOrder=BCHOrder
         
-    def phase(self):
+    def overlap(self):
         '''Calculates the phase of an interferometer object'''
         hbar=sy.symbols('hbar')
         from sympy import I
         Oup=OpEx([0,0,0,0,0,0])
         Olow=OpEx([0,0,0,0,0,0])
         
-        for u in self.Up:
-            Oup=BCHN(Oup,u.H*(-I/hbar*u.time)).simplify()
+        for u in self.Upper:
+            Oup=BCHN(Oup,u.H*(-I/hbar*u.time), self.BCHExpansionOrder).simplify()
             
-        for u in self.Low:
-            Olow=BCHN(u.H*(I/hbar*u.time), Olow).simplify()
+        for u in self.Lower:
+            Olow=BCHN(u.H*(I/hbar*u.time), Olow, self.BCHExpansionOrder).simplify()
             
             
-            OpEx_res=BCHN(Olow, Oup).simplify()
-            a_res=OpEx_res.a
-            b_res=OpEx_res.b
-            c_res=OpEx_res.c
-            d_res=OpEx_res.d
-            e_res=OpEx_res.e
-            f_res=OpEx_res.f
-            res_dic = { 'p2':    a_res,
-                        'p':     b_res,
-                        'px_xp': c_res,
-                        'x':     d_res,
-                        'const': e_res, 
-                        'x2':    f_res}                 
+        OpEx_res=BCHN(Olow, Oup, self.BCHExpansionOrder).simplify()
+        a_res=OpEx_res.a
+        b_res=OpEx_res.b
+        c_res=OpEx_res.c
+        d_res=OpEx_res.d
+        e_res=OpEx_res.e
+        f_res=OpEx_res.f
+        res_dic = { 'p2':    a_res,
+                    'p':     b_res,
+                    'px_xp': c_res,
+                    'x':     d_res,
+                    'const': e_res, 
+                    'x2':    f_res}                 
         return (res_dic, OpEx_res)
 
 
@@ -127,7 +131,7 @@ class Interferometer():
 # Helper Functions  --------------------------------------------
 
 def C(OpEx1, OpEx2):
-    """input: OpEx1,OpEx2: Two operator expressions
+    """input: OpEx1,OpEx2: Of two quadratic operator expressions
        output: Operator expression for the commutator C(OpEx1,OpEx2) """
     from sympy import I
     hbar=sy.symbols('hbar')
@@ -169,23 +173,25 @@ def BCH4(X,Y):
     return E1+E2xy*sy.Rational('1/2')+(E3x+E3y*(-1))*sy.Rational('1/12')+E4*sy.Rational('-1/24')
 
 
-def BCHN(X,Y,nOrder=8):
-    '''Computes the BCH up to 6th order for two operator expression objects X and Y
+def BCHN(X, Y, nOrder=8):
+    '''Computes the BCH up to 8th order for two operator expression objects X and Y
         exp(X)*exp(Y)=exp(Z(X,Y)).
-        Input: X,Y: Operator expression
-        Output: Operator expression for Z(X,Y)'''
-    
-    # Implement this to order 10
-    # https://link.springer.com/article/10.1007/s00009-020-01681-6    
+        Input: X,Y: Operator expression; nOrder optional desired BCH order 
+        Output: Operator expression for Z(X,Y)
+        Implementation: - Recursive right-nested commutators with maximal reuse
+                        - Minimally right-nested operator basis
+                        - Details in https://link.springer.com/article/10.1007/s00009-020-01681-6
+        
+        Todo: - Implement this up to order 10 at some point
+              - Automatation via parsing a word-tree would be desirable'''   
+
     if nOrder >= 1:
         # do nothing here
         E1=X+Y
         phi1=E1
         phiTemp=phi1
     if nOrder >= 2:
-        # Some more automated ideads
-        # Define a mask and match it down the orders
-        # Now that i think about it - maybe backtracking down the tree is best here
+        # Pre-pared automation
         E2words=['xy']
         E2mask=[item [1:] for item in E2words]
         E2coefficients=[sy.Rational('1/2')]   
@@ -194,9 +200,7 @@ def BCHN(X,Y,nOrder=8):
         phi2=E2xy*sy.Rational('1/2')
         phiTemp=phiTemp+phi2
     if nOrder >= 3:
-        # Some more automated ideads
-        # Define a mask and match it down the orders
-        # Now that i think about it - maybe backtracking down the tree is best here
+        # Pre-pared automation
         E3words=['xxy','yxy']
         E3mask=[item [1:] for item in E3words]
         E3coefficients=[sy.Rational('1/12'),sy.Rational('-1/12')]
@@ -208,9 +212,7 @@ def BCHN(X,Y,nOrder=8):
         phiTemp=phiTemp+phi3
 
     if nOrder >= 4:
-        # Some more automated ideads
-        # Define a mask and match it down the orders
-        # Now that i think about it - maybe backtracking down the tree is best here
+        # Pre-pared automation
         E4words=['xyxy']
         E4mask=[item [1:] for item in E4words]
         E4coefficients=[sy.Rational('-1/24')]
@@ -221,9 +223,7 @@ def BCHN(X,Y,nOrder=8):
         phiTemp=phiTemp+phi4
 
     if nOrder >= 5:
-        # Some more automated ideads
-        # Define a mask and match it down the orders
-        # Now that i think about it - maybe backtracking down the tree is best here
+        # Pre-pared automation
         E5words=['xxxxy','xyxxy','xyyxy','yxxxy',
                  'yyxxy','yyyxy']
         E5mask=[item [1:] for item in E5words]
@@ -245,9 +245,7 @@ def BCHN(X,Y,nOrder=8):
         phiTemp=phiTemp+phi5
         
     if nOrder >= 6:
-        # Some more automated ideads
-        # Define a mask and match it down the orders
-        # Now that i think about it - maybe backtracking down the tree is best here
+        # Pre-pared automation
         E6words=['xxyyxy','xyyxxy','xyyyxy','yxxxxy']
         E6mask=[item [1:] for item in E6words]
         E6coefficients=[sy.Rational('-1/720'),sy.Rational('1/240'),sy.Rational('1/1440'),sy.Rational('1/1440')]
@@ -265,9 +263,7 @@ def BCHN(X,Y,nOrder=8):
         phiTemp=phiTemp+phi6
    
     if nOrder >=7:
-        # Some more automated ideads
-        # Define a mask and match it down the orders
-        # Now that i think about it - maybe backtracking down the tree is best here
+        # Pre-pared automation
         E7words=['xxxxxxy','xxyxxxy','xxyyxxy',
                  'xyxxxxy','xyxyxxy','xyxyyxy',
                  'xyyxxxy','xyyyxxy','xyyyyxy',
@@ -321,9 +317,7 @@ def BCHN(X,Y,nOrder=8):
         phiTemp=phiTemp+phi7
 
         if nOrder >=8:
-            # Some more automated ideads
-            # Define a mask and match it down the orders
-            # Now that i think about it - maybe backtracking down the tree is best here
+        # Pre-pared automation
             E8words=['xxxyyyxy','xxyxyyxy','xxyyyyxy',
                      'xyxxyyxy','xyxyyxxy','xyxyyyxy',
                      'xyyxyxxy','xyyxyyxy','xyyyyyxy',
