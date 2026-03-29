@@ -320,7 +320,163 @@ def test_interaction_picture():
     return all_pass
 
 
-# ===== Main =================================================================
+def test_pert_order_tracking():
+    """Test that perturbative order is correctly tracked and truncated."""
+    print("\n=== Perturbative order tracking ===")
+    all_pass = True
+
+    # Create a quadratic H0 (pert_order=0) and cubic perturbation (pert_order=1)
+    H0 = PolyOpEx({(0, 2): Rational(1, 2), (2, 0): Rational(1, 2)},
+                  pert_order=0, max_pert_order=3)
+    V = PolyOpEx({(3, 0): Rational(1, 10)},
+                 pert_order=1, max_pert_order=3)
+
+    # Commutator [H0, V]: should have pert_order = 0 + 1 = 1
+    comm = moyal_commutator(H0, V)
+    ok = all(comm.get_pert_order(k) == 1 for k in comm.coeffs)
+    print(f"  [H0, V] pert_order = 1: [{'PASS' if ok else 'FAIL'}]")
+    all_pass = all_pass and ok
+
+    # [V, [H0, V]]: pert_order = 1 + 1 = 2
+    comm2 = moyal_commutator(V, comm)
+    ok2 = all(comm2.get_pert_order(k) == 2 for k in comm2.coeffs)
+    print(f"  [V, [H0, V]] pert_order = 2: [{'PASS' if ok2 else 'FAIL'}]")
+    all_pass = all_pass and ok2
+
+    # [V, [V, [H0, V]]]: pert_order = 1 + 2 = 3
+    comm3 = moyal_commutator(V, comm2)
+    ok3 = all(comm3.get_pert_order(k) == 3 for k in comm3.coeffs)
+    print(f"  [V, [V, [H0, V]]] pert_order = 3: [{'PASS' if ok3 else 'FAIL'}]")
+    all_pass = all_pass and ok3
+
+    # [V, comm3] would be pert_order 4 -> should be truncated (max=3)
+    comm4 = moyal_commutator(V, comm3)
+    ok4 = len(comm4.coeffs) == 0
+    print(f"  pert_order 4 truncated to 0 terms: [{'PASS' if ok4 else 'FAIL'}]")
+    all_pass = all_pass and ok4
+
+    # Addition preserves per-term orders correctly
+    mixed = H0 + V
+    ok5 = (mixed.get_pert_order((0, 2)) == 0 and
+           mixed.get_pert_order((2, 0)) == 0 and
+           mixed.get_pert_order((3, 0)) == 1)
+    print(f"  H0 + V preserves per-term orders: [{'PASS' if ok5 else 'FAIL'}]")
+    all_pass = all_pass and ok5
+
+    return all_pass
+
+
+def test_max_degree_truncation():
+    """Test that max_degree truncation makes cubic BCH tractable."""
+    print("\n=== max_degree truncation ===")
+    all_pass = True
+
+    scale = 0.02
+    np.random.seed(555)
+
+    keys = [(3,0), (2,1), (1,2), (0,3), (2,0), (1,1), (0,2), (1,0), (0,1), (0,0)]
+    xc = {k: Rational(int(v * 1000), 1000)
+          for k, v in zip(keys, np.random.uniform(-scale, scale, len(keys)))}
+    yc = {k: Rational(int(v * 1000), 1000)
+          for k, v in zip(keys, np.random.uniform(-scale, scale, len(keys)))}
+
+    # Without truncation: order 7 gives degree-15 intermediates (slow)
+    # With max_degree=6: intermediates capped, much faster, still accurate
+    X_trunc = PolyOpEx(xc, max_degree=6)
+    Y_trunc = PolyOpEx(yc, max_degree=6)
+
+    import time
+
+    # Time the truncated version at order 6 (order 8 with symbolics is too slow)
+    t0 = time.time()
+    Z_trunc = bchn(X_trunc, Y_trunc, 6)
+    t_trunc = time.time() - t0
+
+    # Verify against matrix exponential
+    X_mat = poly_to_matrix(PolyOpEx(xc))
+    Y_mat = poly_to_matrix(PolyOpEx(yc))
+    target = expm(X_mat) @ expm(Y_mat)
+
+    Z_mat = poly_to_matrix(Z_trunc)
+    expZ = expm(Z_mat)
+    err = interior_norm(expZ, target)
+
+    ok1 = err < 1e-2  # degree truncation introduces controllable error
+    print(f"  BCH order 6 (max_degree=6): error = {err:.2e}, time = {t_trunc:.1f}s  [{'PASS' if ok1 else 'FAIL'}]")
+    all_pass = all_pass and ok1
+
+    # Verify truncation actually limits degree
+    ok2 = Z_trunc.degree <= 6
+    print(f"  Result degree ≤ 6: degree={Z_trunc.degree}  [{'PASS' if ok2 else 'FAIL'}]")
+    all_pass = all_pass and ok2
+
+    return all_pass
+
+
+def test_pert_truncated_bch():
+    """Test BCH with perturbative truncation: H0 + εV composed with itself."""
+    print("\n=== Perturbative BCH truncation ===")
+    all_pass = True
+
+    # H = p²/2 + x²/2 + ε*x³  where ε = 0.01
+    eps = Rational(1, 100)
+
+    # Create H*(-i*t/hbar) as the BCH input, split into O(1) + O(ε)
+    t_val = Rational(1, 10)
+    quad_coeffs = {(0, 2): -I * t_val / (2 * hbar),
+                   (2, 0): -I * t_val / (2 * hbar)}
+    pert_coeffs = {(3, 0): -I * t_val * eps / hbar}
+
+    X = PolyOpEx(quad_coeffs, max_degree=8, pert_order=0, max_pert_order=2)
+    V_part = PolyOpEx(pert_coeffs, max_degree=8, pert_order=1, max_pert_order=2)
+    full_X = X + V_part
+
+    # Y = same (two equal time steps)
+    Y = PolyOpEx(dict(full_X.coeffs), full_X.max_degree,
+                 pert_order=dict(full_X._pert_order),
+                 max_pert_order=full_X.max_pert_order)
+
+    import time
+    t0 = time.time()
+    Z = bchn(full_X, Y, 4)
+    elapsed = time.time() - t0
+
+    # Check: result should contain O(ε^0), O(ε^1), O(ε^2) terms
+    orders_present = set(Z._pert_order.values())
+    ok1 = 0 in orders_present and 1 in orders_present
+    print(f"  BCH has O(1) and O(ε) terms: {orders_present}  [{'PASS' if ok1 else 'FAIL'}]")
+    all_pass = all_pass and ok1
+
+    # No O(ε³) or higher terms should be present
+    ok2 = all(po <= 2 for po in Z._pert_order.values())
+    print(f"  No terms above O(ε²): [{'PASS' if ok2 else 'FAIL'}]")
+    all_pass = all_pass and ok2
+
+    # Performance: should be fast with truncation
+    ok3 = elapsed < 30.0  # generous bound
+    print(f"  Completed in {elapsed:.1f}s (< 30s): [{'PASS' if ok3 else 'FAIL'}]")
+    all_pass = all_pass and ok3
+
+    # Numerical check: compare with matrix exp at ε=0.01
+    Z_num = PolyOpEx(
+        {k: complex(sy.simplify(v).subs(hbar, 1))
+         for k, v in Z.coeffs.items()})
+    Z_mat = poly_to_matrix(Z_num)
+    expZ = expm(Z_mat)
+
+    # Build full X matrix
+    full_X_num = PolyOpEx(
+        {k: complex(sy.simplify(v).subs(hbar, 1))
+         for k, v in full_X.coeffs.items()})
+    X_mat = poly_to_matrix(full_X_num)
+    target = expm(X_mat) @ expm(X_mat)
+
+    err = interior_norm(expZ, target)
+    ok4 = err < 1e-3
+    print(f"  Numerical accuracy: error = {err:.2e}  [{'PASS' if ok4 else 'FAIL'}]")
+    all_pass = all_pass and ok4
+
+    return all_pass
 
 if __name__ == '__main__':
     print("=" * 60)
@@ -334,6 +490,9 @@ if __name__ == '__main__':
     results.append(("bchn vs BCHN", test_bchn_vs_BCHN()))
     results.append(("BCH cubic convergence", test_bchn_cubic_convergence()))
     results.append(("Interaction picture", test_interaction_picture()))
+    results.append(("Pert order tracking", test_pert_order_tracking()))
+    results.append(("max_degree truncation", test_max_degree_truncation()))
+    results.append(("Pert truncated BCH", test_pert_truncated_bch()))
 
     print("\n" + "=" * 60)
     print("SUMMARY")

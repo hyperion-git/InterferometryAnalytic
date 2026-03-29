@@ -11,6 +11,12 @@ operator Σ c_{a,b} Sym(x^a p^b).
 The commutator is the Moyal bracket, which is exact for polynomials and
 reduces to the Poisson bracket (times iℏ) at leading order.
 
+Perturbative order tracking:
+    Each monomial can carry an integer perturbative weight.  When a
+    max_pert_order is set, terms exceeding that weight are automatically
+    dropped in all operations (commutators, addition, BCH).  This makes
+    high-order BCH with non-quadratic Hamiltonians tractable.
+
 References:
     Arnal, Casas, Chiralt, Mediterr. J. Math. 18, 53 (2021) [arXiv:2006.15869]
 """
@@ -58,26 +64,54 @@ class PolyOpEx:
         Mapping (a, b) -> sympy expression.  Zero entries are dropped.
     max_degree : int or None
         If set, monomials with a+b > max_degree are silently truncated.
+    pert_order : dict or int or None
+        Perturbative order for each monomial.
+        - dict {(a, b): int} — per-monomial weights
+        - int — uniform weight for all monomials
+        - None — no perturbative tracking (weight 0 for all)
+    max_pert_order : int or None
+        If set, monomials with perturbative order > max_pert_order are
+        silently dropped in all operations.
     """
 
-    def __init__(self, coeffs, max_degree=None):
+    def __init__(self, coeffs, max_degree=None, pert_order=None, max_pert_order=None):
         self.max_degree = max_degree
+        self.max_pert_order = max_pert_order
+
+        # Normalize pert_order to a dict
+        if pert_order is None:
+            self._pert_order = {}    # default: 0 for everything
+        elif isinstance(pert_order, int):
+            self._pert_order = {k: pert_order for k in coeffs if coeffs[k] != 0}
+        else:
+            self._pert_order = dict(pert_order)
+
         self.coeffs = {}
         for (a, b), c in coeffs.items():
             if c == 0:
                 continue
             if max_degree is not None and a + b > max_degree:
                 continue
+            po = self._pert_order.get((a, b), 0)
+            if max_pert_order is not None and po > max_pert_order:
+                continue
             self.coeffs[(a, b)] = c
+
+        # Clean up pert_order to match actual coeffs
+        self._pert_order = {k: self._pert_order.get(k, 0) for k in self.coeffs}
+
+    def get_pert_order(self, key):
+        """Get perturbative order for monomial (a, b)."""
+        return self._pert_order.get(key, 0)
 
     # --- constructors -------------------------------------------------------
 
     @classmethod
-    def zero(cls, max_degree=None):
-        return cls({}, max_degree)
+    def zero(cls, max_degree=None, max_pert_order=None):
+        return cls({}, max_degree, max_pert_order=max_pert_order)
 
     @classmethod
-    def from_opex(cls, opex, max_degree=None):
+    def from_opex(cls, opex, max_degree=None, max_pert_order=None):
         """Convert from OpEx [a,b,c,d,e,f] = a·p² + b·p + c·(xp+px) + d·x + e + f·x²."""
         coeffs = {}
         if opex.a != 0: coeffs[(0, 2)] = opex.a
@@ -87,7 +121,7 @@ class PolyOpEx:
         if opex.e != 0: coeffs[(0, 0)] = opex.e
         if opex.f != 0: coeffs[(2, 0)] = opex.f
         md = max_degree if max_degree is not None else 2
-        return cls(coeffs, md)
+        return cls(coeffs, md, pert_order=0, max_pert_order=max_pert_order)
 
     def to_opex(self):
         """Convert back to OpEx.  Raises ValueError if degree > 2."""
@@ -113,18 +147,49 @@ class PolyOpEx:
             return 0
         return max(a + b for (a, b) in self.coeffs)
 
-    # --- arithmetic ---------------------------------------------------------
+    @property
+    def pert_degree(self):
+        """Maximum perturbative order across all monomials."""
+        if not self._pert_order:
+            return 0
+        return max(self._pert_order.values()) if self._pert_order else 0
 
-    def __add__(self, other):
+    # --- truncation helpers -------------------------------------------------
+
+    def _merge_truncation(self, other):
+        """Determine combined max_degree and max_pert_order from two operands."""
         md = self.max_degree
         if md is None:
             md = other.max_degree
         elif other.max_degree is not None:
             md = max(md, other.max_degree)
-        result = dict(self.coeffs)
+
+        mpo = self.max_pert_order
+        if mpo is None:
+            mpo = other.max_pert_order
+        elif other.max_pert_order is not None:
+            mpo = max(mpo, other.max_pert_order)
+
+        return md, mpo
+
+    # --- arithmetic ---------------------------------------------------------
+
+    def __add__(self, other):
+        md, mpo = self._merge_truncation(other)
+
+        result_coeffs = dict(self.coeffs)
+        result_po = dict(self._pert_order)
+
         for k, v in other.coeffs.items():
-            result[k] = result.get(k, 0) + v
-        return PolyOpEx(result, md)
+            result_coeffs[k] = result_coeffs.get(k, 0) + v
+            # For addition: take the minimum pert_order of the two terms
+            # (the sum inherits the lowest order at which it contributes)
+            if k in result_po:
+                result_po[k] = min(result_po[k], other.get_pert_order(k))
+            else:
+                result_po[k] = other.get_pert_order(k)
+
+        return PolyOpEx(result_coeffs, md, pert_order=result_po, max_pert_order=mpo)
 
     def __sub__(self, other):
         return self + (other * (-1))
@@ -133,8 +198,11 @@ class PolyOpEx:
         return self * (-1)
 
     def __mul__(self, scalar):
-        return PolyOpEx({k: v * scalar for k, v in self.coeffs.items()},
-                        self.max_degree)
+        return PolyOpEx(
+            {k: v * scalar for k, v in self.coeffs.items()},
+            self.max_degree,
+            pert_order=dict(self._pert_order),
+            max_pert_order=self.max_pert_order)
 
     def __rmul__(self, scalar):
         return self * scalar
@@ -150,12 +218,25 @@ class PolyOpEx:
         return True
 
     def simplify(self):
-        return PolyOpEx({k: sy.simplify(v) for k, v in self.coeffs.items()},
-                        self.max_degree)
+        return PolyOpEx(
+            {k: sy.simplify(v) for k, v in self.coeffs.items()},
+            self.max_degree,
+            pert_order=dict(self._pert_order),
+            max_pert_order=self.max_pert_order)
 
     def expand(self):
-        return PolyOpEx({k: sy.expand(v) for k, v in self.coeffs.items()},
-                        self.max_degree)
+        return PolyOpEx(
+            {k: sy.expand(v) for k, v in self.coeffs.items()},
+            self.max_degree,
+            pert_order=dict(self._pert_order),
+            max_pert_order=self.max_pert_order)
+
+    def truncate(self, max_degree=None, max_pert_order=None):
+        """Return a new PolyOpEx with tighter truncation bounds."""
+        md = max_degree if max_degree is not None else self.max_degree
+        mpo = max_pert_order if max_pert_order is not None else self.max_pert_order
+        return PolyOpEx(dict(self.coeffs), md,
+                        pert_order=dict(self._pert_order), max_pert_order=mpo)
 
     # --- display ------------------------------------------------------------
 
@@ -172,7 +253,9 @@ class PolyOpEx:
             elif b > 1: mon += f'p^{b}'
             if not mon:
                 mon = '1'
-            terms.append(f'({c})*{mon}')
+            po = self._pert_order.get((a, b), 0)
+            po_str = f'[O({po})]' if po > 0 else ''
+            terms.append(f'({c})*{mon}{po_str}')
         return 'PolyOpEx(' + ' + '.join(terms) + ')'
 
 
@@ -189,15 +272,28 @@ def moyal_commutator(A, B):
                    × Σ_k (-1)^k C(2s+1,k) (∂_x^{N-k} ∂_p^k f)(∂_x^k ∂_p^{N-k} g)
 
     where N = 2s+1.  The series terminates for polynomial f, g.
+
+    Perturbative order: [A, B] at monomial level has pert_order =
+    pert_order(A_monomial) + pert_order(B_monomial).  Terms exceeding
+    max_pert_order are dropped.
+
+    Degree truncation: result monomials with degree > max_degree are dropped.
     """
-    md = A.max_degree
-    if md is None:
-        md = B.max_degree
+    md, mpo = A._merge_truncation(B)
 
     result = defaultdict(lambda: sy.Integer(0))
+    result_po = {}
 
     for (a1, b1), c1 in A.coeffs.items():
+        po1 = A.get_pert_order((a1, b1))
         for (a2, b2), c2 in B.coeffs.items():
+            po2 = B.get_pert_order((a2, b2))
+            po_out = po1 + po2
+
+            # Early exit: skip if perturbative order already too high
+            if mpo is not None and po_out > mpo:
+                continue
+
             # Maximum Moyal order: N = 2s+1 ≤ min(a1+b1, a2+b2)
             max_N = min(a1 + b1, a2 + b2)
 
@@ -212,7 +308,7 @@ def moyal_commutator(A, B):
                 if md is not None and rx + rp > md:
                     continue
 
-                # Prefactor:  2 · (iℏ/2)^N / N!  =  i·(-1)^s · ℏ^N / (2^{2s} · N!)
+                # Prefactor:  2 · (iℏ/2)^N / N!
                 prefactor = 2 * (I * hbar / 2)**N / factorial(N)
 
                 # Inner sum over k
@@ -228,8 +324,13 @@ def moyal_commutator(A, B):
 
                 if bracket_sum != 0:
                     result[(rx, rp)] += prefactor * c1 * c2 * bracket_sum
+                    # Track pert_order: take minimum if already present
+                    if (rx, rp) in result_po:
+                        result_po[(rx, rp)] = min(result_po[(rx, rp)], po_out)
+                    else:
+                        result_po[(rx, rp)] = po_out
 
-    return PolyOpEx(dict(result), md)
+    return PolyOpEx(dict(result), md, pert_order=result_po, max_pert_order=mpo)
 
 
 # ---------------------------------------------------------------------------
@@ -291,7 +392,6 @@ def _eval_word(word, X, Y, comm, cache):
         return cache[word]
 
     if len(word) == 2:
-        # Base case: "xy" -> comm(X, Y)
         assert word == 'xy', f"Unexpected base word: {word}"
         result = comm(X, Y)
     else:
@@ -356,6 +456,8 @@ def interaction_picture(H0, V, t):
     The interaction-picture operator is obtained by substituting the
     evolved x(t), p(t) into V's Weyl symbol.
 
+    Perturbative order is preserved from V.
+
     Parameters
     ----------
     H0 : PolyOpEx
@@ -375,30 +477,33 @@ def interaction_picture(H0, V, t):
 
     M_exp, v_shift = classical_evolution_matrix(H0, t)
 
-    # x(t) = M_exp[0,0]*x + M_exp[0,1]*p + v_shift[0]
-    # p(t) = M_exp[1,0]*x + M_exp[1,1]*p + v_shift[1]
-    x_t = (M_exp[0, 0], M_exp[0, 1], v_shift[0])   # (coeff_x, coeff_p, const)
+    x_t = (M_exp[0, 0], M_exp[0, 1], v_shift[0])
     p_t = (M_exp[1, 0], M_exp[1, 1], v_shift[1])
 
-    # Substitute into V's Weyl symbol: for each monomial x^a p^b,
-    # replace x -> x_t, p -> p_t and expand
     x_sym, p_sym = sy.symbols('_x_tmp _p_tmp', commutative=True)
 
     result = defaultdict(lambda: sy.Integer(0))
+    result_po = {}
 
     for (a, b), c in V.coeffs.items():
-        # Build (α*x + β*p + γ)^a * (δ*x + ε*p + ζ)^b symbolically
+        po = V.get_pert_order((a, b))
+
         x_expr = x_t[0] * x_sym + x_t[1] * p_sym + x_t[2]
         p_expr = p_t[0] * x_sym + p_t[1] * p_sym + p_t[2]
 
         poly_expr = sy.expand(c * x_expr**a * p_expr**b)
 
-        # Extract coefficients of x_sym^i * p_sym^j
         poly = sy.Poly(poly_expr, x_sym, p_sym)
         for monom, coeff in poly.as_dict().items():
             result[monom] = result[monom] + coeff
+            # Preserve pert_order from input monomial
+            if monom in result_po:
+                result_po[monom] = min(result_po[monom], po)
+            else:
+                result_po[monom] = po
 
-    return PolyOpEx(dict(result), V.max_degree)
+    return PolyOpEx(dict(result), V.max_degree,
+                    pert_order=result_po, max_pert_order=V.max_pert_order)
 
 
 # ---------------------------------------------------------------------------
@@ -430,7 +535,7 @@ def classical_evolution_matrix(H0, t):
 
     a = H0.coeffs.get((0, 2), 0)   # p²
     b = H0.coeffs.get((0, 1), 0)   # p
-    c = H0.coeffs.get((1, 1), 0)   # xp (Weyl), so the operator coeff of (xp+px) is c/2
+    c = H0.coeffs.get((1, 1), 0)   # xp (Weyl)
     d = H0.coeffs.get((1, 0), 0)   # x
     f = H0.coeffs.get((2, 0), 0)   # x²
 
@@ -439,13 +544,9 @@ def classical_evolution_matrix(H0, t):
 
     M_exp = sy.simplify(sy.exp(M * t))
 
-    # Displacement: integral of exp(Ms) · v ds from 0 to t
-    # = (exp(Mt) - I) · M^{-1} · v  if M is invertible
-    # For singular M, use series expansion
     if M.det() != 0:
         v_shift = sy.simplify((M_exp - sy.eye(2)) * M.inv() * v)
     else:
-        # Series: Σ_{k=0}^∞ M^k t^{k+1} / (k+1)! · v
         v_shift = sy.zeros(2, 1)
         Mk = sy.eye(2)
         for k in range(20):
