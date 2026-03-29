@@ -387,9 +387,9 @@ def test_max_degree_truncation():
 
     import time
 
-    # Time the truncated version at order 6 (order 8 with symbolics is too slow)
+    # Time the truncated version at order 8
     t0 = time.time()
-    Z_trunc = bchn(X_trunc, Y_trunc, 6)
+    Z_trunc = bchn(X_trunc, Y_trunc, 8)
     t_trunc = time.time() - t0
 
     # Verify against matrix exponential
@@ -402,7 +402,7 @@ def test_max_degree_truncation():
     err = interior_norm(expZ, target)
 
     ok1 = err < 1e-2  # degree truncation introduces controllable error
-    print(f"  BCH order 6 (max_degree=6): error = {err:.2e}, time = {t_trunc:.1f}s  [{'PASS' if ok1 else 'FAIL'}]")
+    print(f"  BCH order 8 (max_degree=6): error = {err:.2e}, time = {t_trunc:.1f}s  [{'PASS' if ok1 else 'FAIL'}]")
     all_pass = all_pass and ok1
 
     # Verify truncation actually limits degree
