@@ -94,7 +94,7 @@ class Interferometer():
         self.Upper=UpperSequence
         self.Lower=LowerSequence
         self.UpperSequenceLength=len(UpperSequence)
-        self.LowerSqeuenceLength=len(LowerSequence)
+        self.LowerSequenceLength=len(LowerSequence)
         self.BCHExpansionOrder=BCHOrder
         
     def overlap(self):
@@ -167,8 +167,8 @@ def BCH4(X,Y):
         Output: Operator expression for Z(X,Y)'''
     E1=X+Y
     E2xy=C(X,Y)
-    E3x=C(X,E2)
-    E3y=C(Y,E2)
+    E3x=C(X,E2xy)
+    E3y=C(Y,E2xy)
     E4=C(X,E3y)
     return E1+E2xy*sy.Rational('1/2')+(E3x+E3y*(-1))*sy.Rational('1/12')+E4*sy.Rational('-1/24')
 
@@ -354,8 +354,9 @@ def BCHN(X, Y, nOrder=8):
             phi8e=E8xyxyyxxy*sy.Rational('-1/2016')
             phi8f=(E8xyyyyyxy+E8yxxxxxxy)*sy.Rational('-1/60480')
             phi8g=E8yxxyxxxy*sy.Rational('-1/5040')
+            phi8h=E8xyyxyyxy*sy.Rational('-1/10080')
 
-            phi8=phi8a+phi8b+phi8c+phi8d+phi8e+phi8f+phi8g
+            phi8=phi8a+phi8b+phi8c+phi8d+phi8e+phi8f+phi8g+phi8h
             phiTemp=phiTemp+phi8
 
     phiFinal=phiTemp
