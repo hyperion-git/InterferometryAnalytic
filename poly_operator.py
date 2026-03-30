@@ -625,56 +625,128 @@ def _moyal_commutator_sympy(A, B, md, mpo, ps=None):
 
 
 # ---------------------------------------------------------------------------
-# BCH word tables  (verified against Arnal, Casas, Chiralt 2020)
+# Algorithmic BCH word generation via tensor algebra
 # ---------------------------------------------------------------------------
 
-BCH_WORDS = {
-    2: [('xy', Rational(1, 2))],
-    3: [('xxy', Rational(1, 12)),
-        ('yxy', Rational(-1, 12))],
-    4: [('xyxy', Rational(-1, 24))],
-    5: [('xxxxy', Rational(-1, 720)),
-        ('xyxxy', Rational(-1, 120)),
-        ('xyyxy', Rational(-1, 360)),
-        ('yxxxy', Rational(1, 360)),
-        ('yyxxy', Rational(1, 120)),
-        ('yyyxy', Rational(1, 720))],
-    6: [('xxyyxy', Rational(-1, 720)),
-        ('xyyxxy', Rational(1, 240)),
-        ('xyyyxy', Rational(1, 1440)),
-        ('yxxxxy', Rational(1, 1440))],
-    7: [('xxxxxxy', Rational(1, 30240)),
-        ('xxyxxxy', Rational(1, 5040)),
-        ('xxyyxxy', Rational(-1, 10080)),
-        ('xyxxxxy', Rational(1, 10080)),
-        ('xyxyxxy', Rational(1, 1008)),
-        ('xyxyyxy', Rational(1, 5040)),
-        ('xyyxxxy', Rational(-1, 7560)),
-        ('xyyyxxy', Rational(1, 3360)),
-        ('xyyyyxy', Rational(1, 10080)),
-        ('yxxxxxy', Rational(-1, 10080)),
-        ('yxyxxxy', Rational(-1, 1260)),
-        ('yxyyxxy', Rational(-1, 1680)),
-        ('yyxxxxy', Rational(1, 3360)),
-        ('yyxyxxy', Rational(-1, 3360)),
-        ('yyxyyxy', Rational(-1, 2520)),
-        ('yyyxxxy', Rational(1, 7560)),
-        ('yyyyxxy', Rational(1, 10080)),
-        ('yyyyyxy', Rational(-1, 30240))],
-    8: [('xxxyyyxy', Rational(-5, 24192)),
-        ('xxyxyyxy', Rational(1, 2520)),
-        ('xxyyyyxy', Rational(1, 20160)),
-        ('xyxxyyxy', Rational(1, 15120)),
-        ('xyxyyxxy', Rational(-1, 2016)),
-        ('xyxyyyxy', Rational(-1, 20160)),
-        ('xyyxyxxy', Rational(1, 20160)),
-        ('xyyxyyxy', Rational(-1, 10080)),
-        ('xyyyyyxy', Rational(-1, 60480)),
-        ('yxxxxxxy', Rational(-1, 60480)),
-        ('yxxxyxxy', Rational(1, 20160)),
-        ('yxxyxxxy', Rational(-1, 5040)),
-        ('yyxxxxxy', Rational(1, 20160))],
-}
+def _compute_bch_words(max_order):
+    """Compute BCH coefficients for right-nested commutators up to max_order.
+
+    Algorithm: compute log(exp(X)·exp(Y)) in the free associative algebra
+    (tensor algebra on {x, y}), then apply the Dynkin projection to extract
+    coefficients of right-nested commutators.
+
+    The Dynkin map sends a word w₁...wₙ to (1/n)[w₁,[w₂,...[wₙ₋₁,wₙ]...]].
+    Words ending in [x,y] are collected; words ending in [y,x] contribute
+    with a sign flip.
+
+    Returns {order: [(word_string, Fraction), ...]} in the same format as
+    BCH_WORDS, but using Python Fraction instead of sympy Rational.
+    """
+    n = max_order
+
+    # Tensor algebra operations on {word_tuple: Fraction}
+    def _ta_mul(A, B):
+        result = defaultdict(Fraction)
+        for wa, ca in A.items():
+            for wb, cb in B.items():
+                w = wa + wb
+                if len(w) <= n:
+                    result[w] += ca * cb
+        return {w: c for w, c in result.items() if c != 0}
+
+    def _ta_add(A, B):
+        result = defaultdict(Fraction)
+        for w, c in A.items():
+            result[w] += c
+        for w, c in B.items():
+            result[w] += c
+        return {w: c for w, c in result.items() if c != 0}
+
+    def _ta_scale(A, s):
+        return {w: c * s for w, c in A.items() if c * s != 0}
+
+    # exp(X) = Σ X^k/k!
+    X = {(0,): Fraction(1)}
+    expX = {(): Fraction(1)}
+    Xk = {(): Fraction(1)}
+    for k in range(1, n + 1):
+        Xk = _ta_mul(Xk, X)
+        expX = _ta_add(expX, _ta_scale(Xk, Fraction(1, math.factorial(k))))
+
+    # exp(Y) = Σ Y^k/k!
+    Y = {(1,): Fraction(1)}
+    expY = {(): Fraction(1)}
+    Yk = {(): Fraction(1)}
+    for k in range(1, n + 1):
+        Yk = _ta_mul(Yk, Y)
+        expY = _ta_add(expY, _ta_scale(Yk, Fraction(1, math.factorial(k))))
+
+    # P = exp(X) · exp(Y)
+    P = _ta_mul(expX, expY)
+
+    # A = P - 1 (remove identity)
+    A = dict(P)
+    A.pop((), None)
+
+    # log(1+A) = Σ (-1)^{k+1}/k · A^k
+    L = {}
+    Ak = {(): Fraction(1)}
+    for k in range(1, n + 1):
+        Ak = _ta_mul(Ak, A)
+        L = _ta_add(L, _ta_scale(Ak, Fraction((-1)**(k + 1), k)))
+
+    # Apply Dynkin projection and collect by right-nested commutator word.
+    # π(w₁...wₙ) = (1/n) [w₁,[w₂,...[wₙ₋₁,wₙ]...]]
+    # Words ending in (0,1)="xy" keep sign; ending in (1,0)="yx" flip sign.
+    # Words ending in (0,0) or (1,1) vanish ([x,x]=[y,y]=0).
+    bch_table = {}
+    for order in range(2, n + 1):
+        words_at_order = defaultdict(Fraction)
+        for w, c in L.items():
+            if len(w) != order:
+                continue
+            dynkin_c = Fraction(c.numerator, c.denominator * order)
+            if dynkin_c == 0:
+                continue
+
+            tail = w[-2:]
+            if tail == (0, 0) or tail == (1, 1):
+                continue
+            # Map to canonical form ending in "xy"
+            canonical = w[:-2] + (0, 1)
+            sign = Fraction(1) if tail == (0, 1) else Fraction(-1)
+            words_at_order[canonical] += dynkin_c * sign
+
+        entries = []
+        for w in sorted(words_at_order):
+            c = words_at_order[w]
+            if c != 0:
+                word_str = ''.join('x' if ch == 0 else 'y' for ch in w)
+                entries.append((word_str, c))
+        if entries:
+            bch_table[order] = entries
+
+    return bch_table
+
+
+# Module-level cache: computed once per max_order
+_bch_cache = {}
+
+
+def get_bch_words(max_order):
+    """Get BCH word coefficients up to max_order, computing and caching as needed.
+
+    Returns {order: [(word_string, Fraction), ...]}.
+    """
+    if max_order not in _bch_cache:
+        _bch_cache[max_order] = _compute_bch_words(max_order)
+    table = _bch_cache[max_order]
+    # Return only orders up to max_order
+    return {k: v for k, v in table.items() if k <= max_order}
+
+
+# Pre-compute orders 2-8 for backward compatibility and fast startup
+BCH_WORDS = get_bch_words(8)
 
 
 def _eval_word(word, X, Y, comm, cache):
@@ -702,7 +774,8 @@ def bchn(X, Y, n_order=8, comm=None):
     """Baker-Campbell-Hausdorff expansion: exp(X)·exp(Y) = exp(Z).
 
     Computes Z up to the given order using right-nested commutators
-    with coefficients from Arnal, Casas, Chiralt (2020).
+    with algorithmically generated coefficients (via tensor algebra
+    computation of log(exp(X)·exp(Y)) and Dynkin projection).
 
     Works with any algebra element type that supports +, *, and a
     commutator function.
@@ -711,7 +784,7 @@ def bchn(X, Y, n_order=8, comm=None):
     ----------
     X, Y : PolyOpEx (or any type supporting +, *, simplify)
     n_order : int
-        BCH expansion order (1-8).
+        BCH expansion order (≥ 1, no upper limit).
     comm : callable, optional
         Commutator function comm(A, B).  Defaults to moyal_commutator.
 
@@ -721,14 +794,18 @@ def bchn(X, Y, n_order=8, comm=None):
     """
     if comm is None:
         comm = moyal_commutator
-    if n_order < 1 or n_order > 8:
-        raise ValueError(f"n_order must be 1-8, got {n_order}")
+    if n_order < 1:
+        raise ValueError(f"n_order must be ≥ 1, got {n_order}")
+
+    words = get_bch_words(n_order)
 
     result = X + Y
     cache = {}
 
     for order in range(2, n_order + 1):
-        for word, coeff in BCH_WORDS[order]:
+        if order not in words:
+            continue
+        for word, coeff in words[order]:
             term = _eval_word(word, X, Y, comm, cache)
             result = result + term * coeff
 

@@ -225,19 +225,6 @@ def C(OpEx1, OpEx2):
 
 
 
-def BCH4(X,Y):
-    '''Computes the BCH to 4th order for two operator expression objects X and Y
-        exp(X)*exp(Y)=exp(Z(X,Y)).
-        Input: X,Y: Operator expression
-        Output: Operator expression for Z(X,Y)'''
-    E1=X+Y
-    E2xy=C(X,Y)
-    E3x=C(X,E2xy)
-    E3y=C(Y,E2xy)
-    E4=C(X,E3y)
-    return E1+E2xy*sy.Rational('1/2')+(E3x+E3y*(-1))*sy.Rational('1/12')+E4*sy.Rational('-1/24')
-
-
 def BCHN(X, Y, nOrder=8):
     '''Computes the BCH up to 8th order for two operator expression objects X and Y
         exp(X)*exp(Y)=exp(Z(X,Y)).
@@ -245,10 +232,7 @@ def BCHN(X, Y, nOrder=8):
         Output: Operator expression for Z(X,Y)
         Implementation: - Recursive right-nested commutators with maximal reuse
                         - Minimally right-nested operator basis
-                        - Details in https://link.springer.com/article/10.1007/s00009-020-01681-6
-
-        Todo: - Implement this up to order 10 at some point
-              - Automatation via parsing a word-tree would be desirable'''
+                        - Details in https://link.springer.com/article/10.1007/s00009-020-01681-6'''
 
     if nOrder >= 1:
         # do nothing here
@@ -256,20 +240,10 @@ def BCHN(X, Y, nOrder=8):
         phi1=E1
         phiTemp=phi1
     if nOrder >= 2:
-        # Pre-pared automation
-        E2words=['xy']
-        E2mask=[item [1:] for item in E2words]
-        E2coefficients=[sy.Rational('1/2')]
-
         E2xy=C(X,Y)
         phi2=E2xy*sy.Rational('1/2')
         phiTemp=phiTemp+phi2
     if nOrder >= 3:
-        # Pre-pared automation
-        E3words=['xxy','yxy']
-        E3mask=[item [1:] for item in E3words]
-        E3coefficients=[sy.Rational('1/12'),sy.Rational('-1/12')]
-
         E3xxy=C(X,E2xy)
         E3yxy=C(Y,E2xy)
 
@@ -277,24 +251,12 @@ def BCHN(X, Y, nOrder=8):
         phiTemp=phiTemp+phi3
 
     if nOrder >= 4:
-        # Pre-pared automation
-        E4words=['xyxy']
-        E4mask=[item [1:] for item in E4words]
-        E4coefficients=[sy.Rational('-1/24')]
-
         E4xyxy=C(X,E3yxy)
 
         phi4=E4xyxy*sy.Rational('-1/24')
         phiTemp=phiTemp+phi4
 
     if nOrder >= 5:
-        # Pre-pared automation
-        E5words=['xxxxy','xyxxy','xyyxy','yxxxy',
-                 'yyxxy','yyyxy']
-        E5mask=[item [1:] for item in E5words]
-        E5coefficients=[sy.Rational('-1/720'),sy.Rational('-1/120'),sy.Rational('-1/360'),sy.Rational('1/360'),
-                        sy.Rational('1/120'),sy.Rational('1/720')]
-
         E5xxxxy=C(X,C(X,E3xxy))
         E5xyxxy=C(X,C(Y,E3xxy))
         E5xyyxy=C(X,C(Y,E3yxy))
@@ -310,11 +272,6 @@ def BCHN(X, Y, nOrder=8):
         phiTemp=phiTemp+phi5
 
     if nOrder >= 6:
-        # Pre-pared automation
-        E6words=['xxyyxy','xyyxxy','xyyyxy','yxxxxy']
-        E6mask=[item [1:] for item in E6words]
-        E6coefficients=[sy.Rational('-1/720'),sy.Rational('1/240'),sy.Rational('1/1440'),sy.Rational('1/1440')]
-
         E6xxyyxy=C(X,E5xyyxy)
         E6xyyxxy=C(X,E5yyxxy)
         E6xyyyxy=C(X,E5yyyxy)
@@ -328,22 +285,7 @@ def BCHN(X, Y, nOrder=8):
         phiTemp=phiTemp+phi6
 
     if nOrder >=7:
-        # Pre-pared automation
-        E7words=['xxxxxxy','xxyxxxy','xxyyxxy',
-                 'xyxxxxy','xyxyxxy','xyxyyxy',
-                 'xyyxxxy','xyyyxxy','xyyyyxy',
-                 'yxxxxxy','yxyxxxy','yxyyxxy',
-                 'yyxxxxy','yyxyxxy','yyxyyxy',
-                 'yyyxxxy','yyyyxxy','yyyyyxy']
-        E7mask=[item [1:] for item in E7words]
-        E7coefficients=[sy.Rational('1/30240'),sy.Rational('1/5040'),sy.Rational('-1/10080'),
-                        sy.Rational('1/10080'),sy.Rational('1/1008'),sy.Rational('1/5040'),
-                        sy.Rational('-1/7560'),sy.Rational('1/3360'),sy.Rational('1/10080'),
-                        sy.Rational('-1/10080'),sy.Rational('-1/1260'),sy.Rational('-1/1680'),
-                        sy.Rational('1/3360'),sy.Rational('-1/3360'),sy.Rational('-1/2520'),
-                        sy.Rational('1/7560'),sy.Rational('1/10080'),sy.Rational('-1/30240')]
-
-        # Find some more order 6 elements
+        # Additional order 6 elements needed for order 7
         E6xxxxxy=C(X,E5xxxxy)
         E6xyxxxy=C(X,E5yxxxy)
 
@@ -382,18 +324,6 @@ def BCHN(X, Y, nOrder=8):
         phiTemp=phiTemp+phi7
 
         if nOrder >=8:
-        # Pre-pared automation
-            E8words=['xxxyyyxy','xxyxyyxy','xxyyyyxy',
-                     'xyxxyyxy','xyxyyxxy','xyxyyyxy',
-                     'xyyxyxxy','xyyxyyxy','xyyyyyxy',
-                     'yxxxxxxy','yxxxyxxy','yxxyxxxy','yyxxxxxy']
-
-            E8mask=[item [1:] for item in E8words]
-            E8coefficients=[sy.Rational('-5/24192'),sy.Rational('1/2520'),sy.Rational('1/20160'),
-                            sy.Rational('1/15120'),sy.Rational('-1/2016'),sy.Rational('-1/20160'),
-                            sy.Rational('1/20160'),sy.Rational('-1/10080'),sy.Rational('-1/60480'),
-                            sy.Rational('-1/60480'),sy.Rational('1/20160'),sy.Rational('-1/5040'),sy.Rational('1/20160')]
-
             E6xxyxxy=C(X,E5xyxxy)
             E7xxxyxxy=C(X,E6xxyxxy)
 
