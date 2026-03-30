@@ -145,11 +145,17 @@ class PolyOpEx:
     max_pert_order : int or None
         If set, monomials with perturbative order > max_pert_order are
         silently dropped in all operations.
+    pert_symbol : sympy Symbol or None
+        If set, a symbolic perturbation parameter (e.g., ε).  The method
+        ``collect_pert_orders()`` returns the operator grouped by powers of
+        this symbol, making perturbative structure explicit in the output.
     """
 
-    def __init__(self, coeffs, max_degree=None, pert_order=None, max_pert_order=None):
+    def __init__(self, coeffs, max_degree=None, pert_order=None, max_pert_order=None,
+                 pert_symbol=None):
         self.max_degree = max_degree
         self.max_pert_order = max_pert_order
+        self.pert_symbol = pert_symbol
 
         # Normalize pert_order to a dict
         if pert_order is None:
@@ -196,11 +202,13 @@ class PolyOpEx:
         self._fast = fast
 
     @classmethod
-    def _from_fast(cls, fast, pert_order, max_degree=None, max_pert_order=None):
+    def _from_fast(cls, fast, pert_order, max_degree=None, max_pert_order=None,
+                   pert_symbol=None):
         """Construct from fast representation, bypassing SymPy."""
         obj = cls.__new__(cls)
         obj.max_degree = max_degree
         obj.max_pert_order = max_pert_order
+        obj.pert_symbol = pert_symbol
 
         # Filter and store fast coeffs
         filtered = {}
@@ -241,11 +249,12 @@ class PolyOpEx:
     # --- constructors -------------------------------------------------------
 
     @classmethod
-    def zero(cls, max_degree=None, max_pert_order=None):
-        return cls({}, max_degree, max_pert_order=max_pert_order)
+    def zero(cls, max_degree=None, max_pert_order=None, pert_symbol=None):
+        return cls({}, max_degree, max_pert_order=max_pert_order,
+                   pert_symbol=pert_symbol)
 
     @classmethod
-    def from_opex(cls, opex, max_degree=None, max_pert_order=None):
+    def from_opex(cls, opex, max_degree=None, max_pert_order=None, pert_symbol=None):
         """Convert from OpEx [a,b,c,d,e,f] = a·p² + b·p + c·(xp+px) + d·x + e + f·x²."""
         coeffs = {}
         if opex.a != 0: coeffs[(0, 2)] = opex.a
@@ -255,7 +264,8 @@ class PolyOpEx:
         if opex.e != 0: coeffs[(0, 0)] = opex.e
         if opex.f != 0: coeffs[(2, 0)] = opex.f
         md = max_degree if max_degree is not None else 2
-        return cls(coeffs, md, pert_order=0, max_pert_order=max_pert_order)
+        return cls(coeffs, md, pert_order=0, max_pert_order=max_pert_order,
+                   pert_symbol=pert_symbol)
 
     def to_opex(self):
         """Convert back to OpEx.  Raises ValueError if degree > 2."""
@@ -291,7 +301,7 @@ class PolyOpEx:
     # --- truncation helpers -------------------------------------------------
 
     def _merge_truncation(self, other):
-        """Determine combined max_degree and max_pert_order from two operands."""
+        """Determine combined max_degree, max_pert_order, pert_symbol from two operands."""
         md = self.max_degree
         if md is None:
             md = other.max_degree
@@ -304,7 +314,9 @@ class PolyOpEx:
         elif other.max_pert_order is not None:
             mpo = max(mpo, other.max_pert_order)
 
-        return md, mpo
+        ps = self.pert_symbol if self.pert_symbol is not None else other.pert_symbol
+
+        return md, mpo, ps
 
     # --- arithmetic ---------------------------------------------------------
 
@@ -313,7 +325,7 @@ class PolyOpEx:
         return self._fast is not None
 
     def __add__(self, other):
-        md, mpo = self._merge_truncation(other)
+        md, mpo, ps = self._merge_truncation(other)
 
         # Fast path: both operands in fast representation
         if self._fast is not None and other._fast is not None:
@@ -326,7 +338,8 @@ class PolyOpEx:
                     result_po[k] = min(result_po[k], other.get_pert_order(k))
                 else:
                     result_po[k] = other.get_pert_order(k)
-            return PolyOpEx._from_fast(result_fast, result_po, md, mpo)
+            return PolyOpEx._from_fast(result_fast, result_po, md, mpo,
+                                       pert_symbol=ps)
 
         # Slow path: general sympy coefficients
         result_coeffs = dict(self.coeffs)
@@ -339,7 +352,8 @@ class PolyOpEx:
             else:
                 result_po[k] = other.get_pert_order(k)
 
-        return PolyOpEx(result_coeffs, md, pert_order=result_po, max_pert_order=mpo)
+        return PolyOpEx(result_coeffs, md, pert_order=result_po,
+                        max_pert_order=mpo, pert_symbol=ps)
 
     def __sub__(self, other):
         return self + (other * (-1))
@@ -354,7 +368,8 @@ class PolyOpEx:
                 frac_scalar = Fraction(scalar)
                 return PolyOpEx._from_fast(
                     {k: v * frac_scalar for k, v in self._fast.items()},
-                    dict(self._pert_order), self.max_degree, self.max_pert_order)
+                    dict(self._pert_order), self.max_degree, self.max_pert_order,
+                    pert_symbol=self.pert_symbol)
             except (TypeError, ValueError, ZeroDivisionError):
                 pass
 
@@ -362,7 +377,8 @@ class PolyOpEx:
             {k: v * scalar for k, v in self.coeffs.items()},
             self.max_degree,
             pert_order=dict(self._pert_order),
-            max_pert_order=self.max_pert_order)
+            max_pert_order=self.max_pert_order,
+            pert_symbol=self.pert_symbol)
 
     def __rmul__(self, scalar):
         return self * scalar
@@ -378,25 +394,61 @@ class PolyOpEx:
         return True
 
     def simplify(self):
+        if self._fast is not None:
+            return self  # fast coeffs are already simplified (exact rationals)
         return PolyOpEx(
             {k: sy.simplify(v) for k, v in self.coeffs.items()},
             self.max_degree,
             pert_order=dict(self._pert_order),
-            max_pert_order=self.max_pert_order)
+            max_pert_order=self.max_pert_order,
+            pert_symbol=self.pert_symbol)
 
     def expand(self):
         return PolyOpEx(
             {k: sy.expand(v) for k, v in self.coeffs.items()},
             self.max_degree,
             pert_order=dict(self._pert_order),
-            max_pert_order=self.max_pert_order)
+            max_pert_order=self.max_pert_order,
+            pert_symbol=self.pert_symbol)
 
     def truncate(self, max_degree=None, max_pert_order=None):
         """Return a new PolyOpEx with tighter truncation bounds."""
         md = max_degree if max_degree is not None else self.max_degree
         mpo = max_pert_order if max_pert_order is not None else self.max_pert_order
         return PolyOpEx(dict(self.coeffs), md,
-                        pert_order=dict(self._pert_order), max_pert_order=mpo)
+                        pert_order=dict(self._pert_order), max_pert_order=mpo,
+                        pert_symbol=self.pert_symbol)
+
+    def collect_pert_orders(self):
+        """Return a dict {order: PolyOpEx} grouping terms by perturbative order.
+
+        Useful for inspecting the perturbative structure of the result.
+        If ``pert_symbol`` is set, the returned PolyOpExs have their
+        coefficients multiplied by pert_symbol^order.
+        """
+        groups = defaultdict(dict)
+        po_groups = defaultdict(dict)
+        for (a, b), c in self.coeffs.items():
+            po = self.get_pert_order((a, b))
+            groups[po][(a, b)] = c
+            po_groups[po][(a, b)] = po
+
+        result = {}
+        eps = self.pert_symbol
+        for order, coeffs in sorted(groups.items()):
+            p = PolyOpEx(coeffs, self.max_degree,
+                         pert_order=po_groups[order],
+                         max_pert_order=self.max_pert_order,
+                         pert_symbol=self.pert_symbol)
+            if eps is not None and order > 0:
+                p = PolyOpEx(
+                    {k: v * eps**order for k, v in p.coeffs.items()},
+                    p.max_degree,
+                    pert_order=dict(p._pert_order),
+                    max_pert_order=p.max_pert_order,
+                    pert_symbol=self.pert_symbol)
+            result[order] = p
+        return result
 
     # --- display ------------------------------------------------------------
 
@@ -450,17 +502,17 @@ def moyal_commutator(A, B):
     Uses a fast pure-Python path when both inputs have rational coefficients
     (no symbolic variables other than hbar), avoiding SymPy overhead entirely.
     """
-    md, mpo = A._merge_truncation(B)
+    md, mpo, ps = A._merge_truncation(B)
 
     # Fast path: both operands have rational + hbar representation
     if A._fast is not None and B._fast is not None:
-        return _moyal_commutator_fast(A, B, md, mpo)
+        return _moyal_commutator_fast(A, B, md, mpo, ps)
 
     # Slow path: general sympy coefficients
-    return _moyal_commutator_sympy(A, B, md, mpo)
+    return _moyal_commutator_sympy(A, B, md, mpo, ps)
 
 
-def _moyal_commutator_fast(A, B, md, mpo):
+def _moyal_commutator_fast(A, B, md, mpo, ps=None):
     """Fast Moyal commutator using pure Python Fraction arithmetic."""
     result_fast = defaultdict(Fraction)
     result_po = {}
@@ -513,10 +565,11 @@ def _moyal_commutator_fast(A, B, md, mpo):
                 else:
                     result_po[key] = po_out
 
-    return PolyOpEx._from_fast(dict(result_fast), result_po, md, mpo)
+    return PolyOpEx._from_fast(dict(result_fast), result_po, md, mpo,
+                               pert_symbol=ps)
 
 
-def _moyal_commutator_sympy(A, B, md, mpo):
+def _moyal_commutator_sympy(A, B, md, mpo, ps=None):
     """Moyal commutator using SymPy symbolic arithmetic (general case)."""
     contributions = defaultdict(list)
     result_po = {}
@@ -567,7 +620,8 @@ def _moyal_commutator_sympy(A, B, md, mpo):
         if coeff_sum != 0:
             result[(rx, rp)] += ihbar_N * coeff_sum
 
-    return PolyOpEx(dict(result), md, pert_order=result_po, max_pert_order=mpo)
+    return PolyOpEx(dict(result), md, pert_order=result_po, max_pert_order=mpo,
+                    pert_symbol=ps)
 
 
 # ---------------------------------------------------------------------------
@@ -740,7 +794,8 @@ def interaction_picture(H0, V, t):
                 result_po[monom] = po
 
     return PolyOpEx(dict(result), V.max_degree,
-                    pert_order=result_po, max_pert_order=V.max_pert_order)
+                    pert_order=result_po, max_pert_order=V.max_pert_order,
+                    pert_symbol=V.pert_symbol)
 
 
 # ---------------------------------------------------------------------------
