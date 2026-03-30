@@ -1044,18 +1044,18 @@ def _compute_bch_words(max_order, n_random=50):
 
 
 # ---------------------------------------------------------------------------
-# Pre-computed BCH table for orders 2-8 (minimal right-nested basis).
+# Pre-computed BCH table for orders 2-10 (minimal right-nested basis).
 #
 # These are fixed mathematical constants: the coefficients of the
 # Baker-Campbell-Hausdorff series log(exp(X)·exp(Y)) expressed in a
 # minimal right-nested commutator basis following Arnal, Casas & Chiralt,
 # Mediterr. J. Math. 18, 53 (2021) [arXiv:2006.15869].
 #
-# Total: 45 words (vs 111 in the overcomplete Dynkin representation).
-# Word counts per order: {2:1, 3:2, 4:1, 5:6, 6:4, 7:18, 8:13}.
+# Total: 124 words (vs ~600+ in the overcomplete Dynkin representation).
+# Word counts per order: {2:1, 3:2, 4:1, 5:6, 6:4, 7:18, 8:13, 9:38, 10:41}.
 # ---------------------------------------------------------------------------
 
-_BCH_TABLE_2_8 = {
+_BCH_TABLE = {
     2: [('xy', Fraction(1, 2))],
     3: [('xxy', Fraction(1, 12)),
         ('yxy', Fraction(-1, 12))],
@@ -1101,6 +1101,85 @@ _BCH_TABLE_2_8 = {
         ('yyxxxxxy', Fraction(1, 20160)),
         ('yyxxyxxy', Fraction(1, 5040)),
         ('yyyxxxxy', Fraction(-1, 120960))],
+    9: [('xxxxxxxxy', Fraction(-1, 1209600)),
+        ('xxxxxxyxy', Fraction(-1, 302400)),
+        ('xxxxxyyxy', Fraction(1, 113400)),
+        ('xxxxyxyxy', Fraction(-1, 40320)),
+        ('xxxxyyyxy', Fraction(-1, 120960)),
+        ('xxxyyyyxy', Fraction(13, 604800)),
+        ('xxyxxxyxy', Fraction(1, 30240)),
+        ('xxyxxyyxy', Fraction(1, 30240)),
+        ('xxyxyyyxy', Fraction(-1, 20160)),
+        ('xxyyxxxxy', Fraction(-1, 120960)),
+        ('xxyyyyyxy', Fraction(-1, 302400)),
+        ('xyxxxxxxy', Fraction(-1, 151200)),
+        ('xyxxxxyxy', Fraction(-1, 20160)),
+        ('xyxxyxyxy', Fraction(-1, 10080)),
+        ('xyxxyyyxy', Fraction(1, 40320)),
+        ('xyyxyxyxy', Fraction(-1, 20160)),
+        ('xyyyyxxxy', Fraction(-1, 120960)),
+        ('xyyyyxyxy', Fraction(-1, 50400)),
+        ('xyyyyyyxy', Fraction(-1, 302400)),
+        ('yxxxxxxxy', Fraction(1, 302400)),
+        ('yxxxxyxxy', Fraction(1, 50400)),
+        ('yxxxxyyxy', Fraction(1, 60480)),
+        ('yxxyyxxxy', Fraction(-1, 30240)),
+        ('yxyxxyxxy', Fraction(1, 10080)),
+        ('yxyyxyxxy', Fraction(1, 10080)),
+        ('yxyyyyxxy', Fraction(1, 20160)),
+        ('yxyyyyyxy', Fraction(1, 151200)),
+        ('yyxxxxxxy', Fraction(1, 302400)),
+        ('yyxxxyxxy', Fraction(-1, 40320)),
+        ('yyxxyyyxy', Fraction(1, 120960)),
+        ('yyxyyxxxy', Fraction(-1, 30240)),
+        ('yyxyyyxxy', Fraction(-1, 30240)),
+        ('yyyxxxxxy', Fraction(1, 302400)),
+        ('yyyyxxxxy', Fraction(1, 120960)),
+        ('yyyyxyxxy', Fraction(1, 40320)),
+        ('yyyyyxxxy', Fraction(-1, 113400)),
+        ('yyyyyyxxy', Fraction(1, 302400)),
+        ('yyyyyyyxy', Fraction(1, 1209600))],
+    10: [('xxxyyyyyxy', Fraction(-73, 3628800)),
+         ('xxyxyyyyxy', Fraction(1, 16800)),
+         ('xxyyxyyyxy', Fraction(-1, 20160)),
+         ('xyxyyyyxxy', Fraction(1, 40320)),
+         ('xyyxyxyyxy', Fraction(1, 120960)),
+         ('xyyxyyyxxy', Fraction(-1, 48384)),
+         ('xyyyyxxyxy', Fraction(1, 80640)),
+         ('xyyyyyxxxy', Fraction(-1, 226800)),
+         ('yxxxxxxxxy', Fraction(1, 2419200)),
+         ('yxxxxxxyxy', Fraction(1, 86400)),
+         ('yxxxxxyyxy', Fraction(1, 1814400)),
+         ('yxxxxyxxxy', Fraction(-1, 60480)),
+         ('yxxxxyyyxy', Fraction(1, 241920)),
+         ('yxxyxxxxxy', Fraction(1, 100800)),
+         ('yxxyxxyxxy', Fraction(1, 120960)),
+         ('yxxyxxyyxy', Fraction(-1, 60480)),
+         ('yxxyyxxxxy', Fraction(-1, 120960)),
+         ('yxyxxxxyxy', Fraction(-1, 40320)),
+         ('yxyxxyxxxy', Fraction(1, 20160)),
+         ('yxyxxyyxxy', Fraction(1, 20160)),
+         ('yxyyxxxxxy', Fraction(-1, 201600)),
+         ('yxyyxyyyxy', Fraction(1, 120960)),
+         ('yxyyyyxyxy', Fraction(1, 302400)),
+         ('yxyyyyyyxy', Fraction(1, 604800)),
+         ('yyxxxxxxxy', Fraction(-1, 604800)),
+         ('yyxxxyxyxy', Fraction(-1, 60480)),
+         ('yyxxyxxxxy', Fraction(-1, 80640)),
+         ('yyxyxxxyxy', Fraction(-1, 60480)),
+         ('yyxyxyyyxy', Fraction(-1, 100800)),
+         ('yyxyyxxxxy', Fraction(1, 120960)),
+         ('yyxyyyyxxy', Fraction(-1, 201600)),
+         ('yyyxxxxxxy', Fraction(1, 453600)),
+         ('yyyxxyxxxy', Fraction(1, 60480)),
+         ('yyyxyxxxxy', Fraction(-1, 60480)),
+         ('yyyxyxyyxy', Fraction(1, 100800)),
+         ('yyyxyyxyxy', Fraction(-1, 604800)),
+         ('yyyxyyyyxy', Fraction(-1, 172800)),
+         ('yyyyxxxxxy', Fraction(1, 403200)),
+         ('yyyyxxyyxy', Fraction(-1, 604800)),
+         ('yyyyxyyyxy', Fraction(1, 172800)),
+         ('yyyyyyxyxy', Fraction(-1, 806400))],
 }
 
 
@@ -1111,13 +1190,13 @@ _bch_cache = {}
 def get_bch_words(max_order):
     """Get BCH word coefficients up to max_order, computing and caching as needed.
 
-    For orders 2-8, returns the pre-computed minimal basis table.
+    For orders 2-10, returns the pre-computed minimal basis table.
     For higher orders, computes on demand via tensor algebra + Gaussian elimination.
 
     Returns {order: [(word_string, Fraction), ...]}.
     """
-    if max_order <= 8:
-        return {k: v for k, v in _BCH_TABLE_2_8.items() if k <= max_order}
+    if max_order <= 10:
+        return {k: v for k, v in _BCH_TABLE.items() if k <= max_order}
 
     if max_order not in _bch_cache:
         _bch_cache[max_order] = _compute_bch_words(max_order)
