@@ -628,23 +628,44 @@ def _moyal_commutator_sympy(A, B, md, mpo, ps=None):
 # Algorithmic BCH word generation via tensor algebra
 # ---------------------------------------------------------------------------
 
-def _compute_bch_words(max_order):
-    """Compute BCH coefficients for right-nested commutators up to max_order.
+def _right_nested_expand(word):
+    """Expand right-nested commutator [w₁,[w₂,...]] in the tensor algebra.
 
-    Algorithm: compute log(exp(X)·exp(Y)) in the free associative algebra
-    (tensor algebra on {x, y}), then apply the Dynkin projection to extract
-    coefficients of right-nested commutators.
-
-    The Dynkin map sends a word w₁...wₙ to (1/n)[w₁,[w₂,...[wₙ₋₁,wₙ]...]].
-    Words ending in [x,y] are collected; words ending in [y,x] contribute
-    with a sign flip.
-
-    Returns {order: [(word_string, Fraction), ...]} in the same format as
-    BCH_WORDS, but using Python Fraction instead of sympy Rational.
+    Returns {tensor_word_tuple: Fraction}.
     """
+    if len(word) == 1:
+        return {(word[0],): Fraction(1)}
+    inner = _right_nested_expand(word[1:])
+    w1 = word[0]
+    result = defaultdict(Fraction)
+    for w, c in inner.items():
+        result[(w1,) + w] += c
+        result[w + (w1,)] -= c
+    return {w: c for w, c in result.items() if c != 0}
+
+
+def _compute_bch_words(max_order, n_random=50):
+    """Compute BCH coefficients for a minimal right-nested commutator basis.
+
+    Algorithm:
+    1. Compute log(exp(X)·exp(Y)) in the free associative algebra
+       (tensor algebra on {x, y}).
+    2. Apply the Dynkin projection to get an overcomplete representation
+       as a sum of right-nested commutators.
+    3. For each order, find a basis of the free Lie algebra (via Gaussian
+       elimination on the tensor expansion matrix) that minimizes the
+       number of nonzero BCH coefficients.
+    4. Consolidate the overcomplete coefficients onto the chosen basis.
+
+    The basis optimization uses multiple random column orderings for the
+    Gaussian elimination plus swap refinement to find a sparse representation.
+
+    Returns {order: [(word_string, Fraction), ...]}.
+    """
+    import random as _random
     n = max_order
 
-    # Tensor algebra operations on {word_tuple: Fraction}
+    # --- Step 1: compute log(exp(X)·exp(Y)) in tensor algebra ---
     def _ta_mul(A, B):
         result = defaultdict(Fraction)
         for wa, ca in A.items():
@@ -665,7 +686,6 @@ def _compute_bch_words(max_order):
     def _ta_scale(A, s):
         return {w: c * s for w, c in A.items() if c * s != 0}
 
-    # exp(X) = Σ X^k/k!
     X = {(0,): Fraction(1)}
     expX = {(): Fraction(1)}
     Xk = {(): Fraction(1)}
@@ -673,7 +693,6 @@ def _compute_bch_words(max_order):
         Xk = _ta_mul(Xk, X)
         expX = _ta_add(expX, _ta_scale(Xk, Fraction(1, math.factorial(k))))
 
-    # exp(Y) = Σ Y^k/k!
     Y = {(1,): Fraction(1)}
     expY = {(): Fraction(1)}
     Yk = {(): Fraction(1)}
@@ -681,52 +700,241 @@ def _compute_bch_words(max_order):
         Yk = _ta_mul(Yk, Y)
         expY = _ta_add(expY, _ta_scale(Yk, Fraction(1, math.factorial(k))))
 
-    # P = exp(X) · exp(Y)
     P = _ta_mul(expX, expY)
-
-    # A = P - 1 (remove identity)
     A = dict(P)
     A.pop((), None)
 
-    # log(1+A) = Σ (-1)^{k+1}/k · A^k
     L = {}
     Ak = {(): Fraction(1)}
     for k in range(1, n + 1):
         Ak = _ta_mul(Ak, A)
         L = _ta_add(L, _ta_scale(Ak, Fraction((-1)**(k + 1), k)))
 
-    # Apply Dynkin projection and collect by right-nested commutator word.
-    # π(w₁...wₙ) = (1/n) [w₁,[w₂,...[wₙ₋₁,wₙ]...]]
-    # Words ending in (0,1)="xy" keep sign; ending in (1,0)="yx" flip sign.
-    # Words ending in (0,0) or (1,1) vanish ([x,x]=[y,y]=0).
-    bch_table = {}
+    # --- Step 2: Dynkin projection → overcomplete representation ---
+    dynkin = {}
     for order in range(2, n + 1):
-        words_at_order = defaultdict(Fraction)
+        oc = defaultdict(Fraction)
         for w, c in L.items():
             if len(w) != order:
                 continue
-            dynkin_c = Fraction(c.numerator, c.denominator * order)
-            if dynkin_c == 0:
+            dc = c / order
+            if dc == 0:
                 continue
-
             tail = w[-2:]
-            if tail == (0, 0) or tail == (1, 1):
+            if tail in ((0, 0), (1, 1)):
                 continue
-            # Map to canonical form ending in "xy"
-            canonical = w[:-2] + (0, 1)
+            canon = w[:-2] + (0, 1)
             sign = Fraction(1) if tail == (0, 1) else Fraction(-1)
-            words_at_order[canonical] += dynkin_c * sign
+            oc[canon] += dc * sign
+        dynkin[order] = {w: c for w, c in oc.items() if c}
 
-        entries = []
-        for w in sorted(words_at_order):
-            c = words_at_order[w]
-            if c != 0:
-                word_str = ''.join('x' if ch == 0 else 'y' for ch in w)
-                entries.append((word_str, c))
-        if entries:
-            bch_table[order] = entries
+    # --- Steps 3-4: find minimal basis and consolidate ---
+    bch_table = {}
+
+    for order in range(2, n + 1):
+        oc = dynkin.get(order, {})
+        if not oc:
+            continue
+
+        # Enumerate all words of length `order` ending in (0,1)
+        all_words = []
+        for bits in range(2 ** (order - 2)):
+            prefix = tuple((bits >> i) & 1 for i in range(order - 2))
+            all_words.append(prefix + (0, 1))
+        all_words.sort()
+        word_idx = {w: i for i, w in enumerate(all_words)}
+        nc = len(all_words)
+
+        # Expand each word's right-nested commutator in the tensor algebra
+        exps = [_right_nested_expand(w) for w in all_words]
+        all_monos = set()
+        for e in exps:
+            all_monos.update(e.keys())
+        mono_list = sorted(all_monos)
+        mono_idx = {m: i for i, m in enumerate(mono_list)}
+        nr = len(mono_list)
+
+        # Build expansion matrix M (rows = tensor monomials, cols = words)
+        Mf = [[Fraction(0)] * nc for _ in range(nr)]
+        for j, e in enumerate(exps):
+            for m, c in e.items():
+                Mf[mono_idx[m]][j] = c
+
+        def _try_basis(col_order):
+            """Gaussian elimination in given column order → basis + BCH coeffs."""
+            aug = [row[:] for row in Mf]
+            pivots = []
+            pr = {}
+            row = 0
+            for c in col_order:
+                p = None
+                for r in range(row, nr):
+                    if aug[r][c]:
+                        p = r
+                        break
+                if p is None:
+                    continue
+                aug[row], aug[p] = aug[p], aug[row]
+                pivots.append(c)
+                pr[c] = row
+                s = aug[row][c]
+                for c2 in range(nc):
+                    aug[row][c2] /= s
+                for r in range(nr):
+                    if r != row and aug[r][c]:
+                        f = aug[r][c]
+                        for c2 in range(nc):
+                            aug[r][c2] -= f * aug[row][c2]
+                row += 1
+            # Consolidate overcomplete coefficients onto basis
+            bc = defaultdict(Fraction)
+            for w, c in oc.items():
+                j = word_idx[w]
+                if j in pr:
+                    bc[j] += c
+                else:
+                    for p in pivots:
+                        coeff = aug[pr[p]][j]
+                        if coeff:
+                            bc[p] += c * coeff
+            nz = sum(1 for v in bc.values() if v)
+            entries = []
+            for j, c in sorted(bc.items()):
+                if c:
+                    ws = ''.join('x' if ch == 0 else 'y' for ch in all_words[j])
+                    entries.append((ws, c))
+            return nz, entries, set(pivots)
+
+        best_nz = nc + 1
+        best_entries = []
+        best_pivots = set()
+
+        # Try deterministic orderings
+        for col_order in [list(range(nc)),
+                          list(range(nc - 1, -1, -1)),
+                          sorted(range(nc), key=lambda j: abs(
+                              oc.get(all_words[j], Fraction(0))))]:
+            nz, ent, piv = _try_basis(col_order)
+            if nz < best_nz:
+                best_nz, best_entries, best_pivots = nz, ent, piv
+
+        # Try random orderings (deterministic seed for reproducibility)
+        rng = _random.Random(order * 12345)
+        for _ in range(n_random):
+            col_order = list(range(nc))
+            rng.shuffle(col_order)
+            nz, ent, piv = _try_basis(col_order)
+            if nz < best_nz:
+                best_nz, best_entries, best_pivots = nz, ent, piv
+
+        # Swap refinement: try replacing each basis word with each non-basis word
+        rank = len(best_pivots)
+        improved = True
+        while improved:
+            improved = False
+            for np_col in range(nc):
+                if np_col in best_pivots:
+                    continue
+                for p_col in sorted(best_pivots):
+                    trial = (best_pivots - {p_col}) | {np_col}
+                    tl = sorted(trial)
+                    # Check if trial set has full rank
+                    sub = [[Mf[i][j] for j in tl] for i in range(nr)]
+                    r2 = 0
+                    for c in range(rank):
+                        pp = None
+                        for r in range(r2, nr):
+                            if sub[r][c]:
+                                pp = r
+                                break
+                        if pp is None:
+                            break
+                        sub[r2], sub[pp] = sub[pp], sub[r2]
+                        s = sub[r2][c]
+                        for c2 in range(rank):
+                            sub[r2][c2] /= s
+                        for r in range(nr):
+                            if r != r2 and sub[r][c]:
+                                f = sub[r][c]
+                                for c2 in range(rank):
+                                    sub[r][c2] -= f * sub[r2][c2]
+                        r2 += 1
+                    if r2 < rank:
+                        continue
+                    col_order = tl + [j for j in range(nc) if j not in trial]
+                    nz, ent, piv = _try_basis(col_order)
+                    if nz < best_nz:
+                        best_nz, best_entries, best_pivots = nz, ent, piv
+                        improved = True
+                        break
+                if improved:
+                    break
+
+        if best_entries:
+            bch_table[order] = best_entries
 
     return bch_table
+
+
+# ---------------------------------------------------------------------------
+# Pre-computed BCH table for orders 2-8 (minimal right-nested basis).
+#
+# These are fixed mathematical constants: the coefficients of the
+# Baker-Campbell-Hausdorff series log(exp(X)·exp(Y)) expressed in a
+# minimal right-nested commutator basis following Arnal, Casas & Chiralt,
+# Mediterr. J. Math. 18, 53 (2021) [arXiv:2006.15869].
+#
+# Total: 45 words (vs 111 in the overcomplete Dynkin representation).
+# Word counts per order: {2:1, 3:2, 4:1, 5:6, 6:4, 7:18, 8:13}.
+# ---------------------------------------------------------------------------
+
+_BCH_TABLE_2_8 = {
+    2: [('xy', Fraction(1, 2))],
+    3: [('xxy', Fraction(1, 12)),
+        ('yxy', Fraction(-1, 12))],
+    4: [('xyxy', Fraction(-1, 24))],
+    5: [('xxxxy', Fraction(-1, 720)),
+        ('xxyxy', Fraction(-1, 120)),
+        ('xyyxy', Fraction(-1, 360)),
+        ('yxxxy', Fraction(1, 360)),
+        ('yxyxy', Fraction(1, 120)),
+        ('yyyxy', Fraction(1, 720))],
+    6: [('xxyyxy', Fraction(-1, 720)),
+        ('xyxyxy', Fraction(1, 240)),
+        ('xyyyxy', Fraction(1, 1440)),
+        ('yxxxxy', Fraction(1, 1440))],
+    7: [('xxxxxxy', Fraction(1, 30240)),
+        ('xxxxyxy', Fraction(-1, 10080)),
+        ('xxxyyxy', Fraction(-1, 7560)),
+        ('xxyxxxy', Fraction(1, 2520)),
+        ('xxyxyxy', Fraction(1, 3360)),
+        ('xxyyyxy', Fraction(-1, 3360)),
+        ('xyxxyxy', Fraction(1, 1680)),
+        ('xyxyyxy', Fraction(1, 1260)),
+        ('xyyyyxy', Fraction(1, 10080)),
+        ('yxxxxxy', Fraction(-1, 10080)),
+        ('yxxxyxy', Fraction(-1, 3360)),
+        ('yxxyyxy', Fraction(1, 7560)),
+        ('yxyxxxy', Fraction(-1, 5040)),
+        ('yxyxyxy', Fraction(-1, 1008)),
+        ('yxyyyxy', Fraction(-1, 10080)),
+        ('yyxxyxy', Fraction(1, 10080)),
+        ('yyxyyxy', Fraction(-1, 5040)),
+        ('yyyyyxy', Fraction(-1, 30240))],
+    8: [('xxyyyyxy', Fraction(1, 20160)),
+        ('xyxyyyxy', Fraction(-1, 10080)),
+        ('xyyyyxxy', Fraction(-1, 20160)),
+        ('xyyyyyxy', Fraction(-1, 60480)),
+        ('yxxxxxxy', Fraction(-1, 60480)),
+        ('yxxxxyxy', Fraction(-1, 20160)),
+        ('yxxxyyxy', Fraction(1, 15120)),
+        ('yxxyxyxy', Fraction(-1, 6720)),
+        ('yxyxxxxy', Fraction(-1, 10080)),
+        ('yxyxxyxy', Fraction(-1, 3360)),
+        ('yyxxxxxy', Fraction(1, 20160)),
+        ('yyxxyxxy', Fraction(1, 5040)),
+        ('yyyxxxxy', Fraction(-1, 120960))],
+}
 
 
 # Module-level cache: computed once per max_order
@@ -736,16 +944,20 @@ _bch_cache = {}
 def get_bch_words(max_order):
     """Get BCH word coefficients up to max_order, computing and caching as needed.
 
+    For orders 2-8, returns the pre-computed minimal basis table.
+    For higher orders, computes on demand via tensor algebra + Gaussian elimination.
+
     Returns {order: [(word_string, Fraction), ...]}.
     """
+    if max_order <= 8:
+        return {k: v for k, v in _BCH_TABLE_2_8.items() if k <= max_order}
+
     if max_order not in _bch_cache:
         _bch_cache[max_order] = _compute_bch_words(max_order)
     table = _bch_cache[max_order]
-    # Return only orders up to max_order
     return {k: v for k, v in table.items() if k <= max_order}
 
 
-# Pre-compute orders 2-8 for backward compatibility and fast startup
 BCH_WORDS = get_bch_words(8)
 
 
