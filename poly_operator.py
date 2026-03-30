@@ -550,6 +550,73 @@ class PolyOpEx:
                 lines.append(f'    {ml:>16s} : {c_str}{po_str}')
         return '\n'.join(lines)
 
+    @staticmethod
+    def _sym_basis(a, b):
+        """Return the sympy expression for the symmetrically ordered basis
+        element Sym(x^a p^b), using hat-notation symbols."""
+        xh = sy.Symbol(r'\hat{x}', commutative=False)
+        ph = sy.Symbol(r'\hat{p}', commutative=False)
+        if a == 0 and b == 0:
+            return sy.Integer(1)
+        if b == 0:
+            return xh**a
+        if a == 0:
+            return ph**b
+        # Mixed: Sym(x^a p^b) = (x^a p^b + p^b x^a) / 2
+        return (xh**a * ph**b + ph**b * xh**a) / 2
+
+    def graded_sympy(self, subs=None):
+        """Return the graded decomposition as {grade: sympy expression}.
+
+        Each grade's expression is a sum of coefficient * Sym(x^a p^b)
+        using non-commutative hat-notation symbols.
+
+        Parameters
+        ----------
+        subs : list of (symbol, value) pairs, optional
+            Substitutions applied to coefficients (e.g., [(hbar, 1)]).
+
+        Returns
+        -------
+        dict : {int: sympy expression} mapping grade to symbolic operator.
+        """
+        grades = self.by_grade()
+        result = {}
+        for n in sorted(grades):
+            expr = sy.Integer(0)
+            comp = grades[n]
+            for (a, b) in sorted(comp.coeffs):
+                c = comp.coeffs[(a, b)]
+                if subs:
+                    c = sy.simplify(c).subs(subs)
+                basis = self._sym_basis(a, b)
+                expr = expr + c * basis
+            result[n] = expr
+        return result
+
+    def graded_latex(self, subs=None):
+        """Return a LaTeX string showing the graded decomposition.
+
+        Parameters
+        ----------
+        subs : list of (symbol, value) pairs, optional
+            Substitutions applied to coefficients.
+
+        Returns
+        -------
+        str : LaTeX source suitable for Jupyter display.
+        """
+        gs = self.graded_sympy(subs=subs)
+        parts = []
+        for n in sorted(gs):
+            label = self._GRADE_LABELS.get(n, f'grade {n}')
+            latex_expr = sy.latex(gs[n])
+            parts.append(
+                rf'\underbrace{{{latex_expr}}}'
+                rf'_{{\text{{grade {n}: {label}}}}}'
+            )
+        return ' + '.join(parts) if parts else '0'
+
     # --- display ------------------------------------------------------------
 
     def __repr__(self):
