@@ -7,7 +7,7 @@ DOI: 10.18725/OPARU-17923
 Tests cover:
   - MZ phase in linear gravity (Eq. 1.88): phi_g = -k*g*T^2
   - Gravity gradient first-order correction (Eq. 1.99):
-    phi_1 = (7/12)*Gamma_zz*g*k*T^4 - Gamma_zz*hbar*k^2/(2m)*T^3
+    phi_1 = (7/12)*Gamma_zz*g*k*T^4 + Gamma_zz*hbar*k^2/(2m)*T^3
   - Kinetic phase from second-order Magnus (Eq. 1.89):
     phi_k = (hbar/2m) * sum_j sum_n k_j^(-) k_n^(+) (t_j - t_n)
   - Full overlap structure for gravity gradient (Eq. 1.108):
