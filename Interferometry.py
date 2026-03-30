@@ -134,6 +134,24 @@ class Interferometer():
             return self._overlap_poly()
         return self._overlap_opex()
 
+    def overlap_graded(self):
+        '''Compute the overlap and return its graded decomposition.
+
+        Returns (grades, result) where:
+          - grades: dict {n: PolyOpEx} with grade-n component of the overlap
+            (0=phase, 1=displacement, 2=distortion, 3+=aberrations)
+          - result: the full PolyOpEx overlap operator
+
+        Always uses the PolyOpEx pipeline internally. The OpEx result
+        is promoted to PolyOpEx if needed.
+        '''
+        if self.use_poly:
+            _, result = self._overlap_poly()
+        else:
+            _, opex_result = self._overlap_opex()
+            result = PolyOpEx.from_opex(opex_result)
+        return result.by_grade(), result
+
     def _overlap_opex(self):
         """Original quadratic overlap using OpEx + BCHN."""
         hbar_sym = sy.symbols('hbar')

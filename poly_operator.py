@@ -450,6 +450,106 @@ class PolyOpEx:
             result[order] = p
         return result
 
+    # --- graded decomposition -----------------------------------------------
+
+    def by_grade(self):
+        """Decompose into graded components: {n: PolyOpEx} where n = a+b.
+
+        Returns a dict mapping grade n to a PolyOpEx containing only the
+        monomials of that grade.  Grade 0 = scalar (phase), grade 1 =
+        linear (displacement), grade 2 = quadratic (distortion), etc.
+        """
+        groups = defaultdict(dict)
+        po_groups = defaultdict(dict)
+        for (a, b), c in self.coeffs.items():
+            n = a + b
+            groups[n][(a, b)] = c
+            po_groups[n][(a, b)] = self._pert_order.get((a, b), 0)
+
+        result = {}
+        for grade in sorted(groups):
+            result[grade] = PolyOpEx(
+                groups[grade], self.max_degree,
+                pert_order=po_groups[grade],
+                max_pert_order=self.max_pert_order,
+                pert_symbol=self.pert_symbol)
+        return result
+
+    def grade(self, n):
+        """Extract the grade-n component (monomials with a+b = n)."""
+        coeffs = {(a, b): c for (a, b), c in self.coeffs.items() if a + b == n}
+        po = {k: self._pert_order.get(k, 0) for k in coeffs}
+        return PolyOpEx(coeffs, self.max_degree, pert_order=po,
+                        max_pert_order=self.max_pert_order,
+                        pert_symbol=self.pert_symbol)
+
+    # Physical labels for each grade in the overlap decomposition
+    _GRADE_LABELS = {
+        0: 'phase',
+        1: 'displacement',
+        2: 'distortion',
+        3: 'aberration (3rd)',
+        4: 'aberration (4th)',
+    }
+
+    # Monomial basis labels: Sym(x^a p^b) in human-readable form
+    _MONOMIAL_LABELS = {
+        (0, 0): '1',
+        (1, 0): 'x', (0, 1): 'p',
+        (2, 0): 'x²', (1, 1): '(xp+px)/2', (0, 2): 'p²',
+        (3, 0): 'x³', (2, 1): 'Sym(x²p)', (1, 2): 'Sym(xp²)', (0, 3): 'p³',
+    }
+
+    @staticmethod
+    def _monomial_label(a, b):
+        """Human-readable label for Sym(x^a p^b)."""
+        key = (a, b)
+        if key in PolyOpEx._MONOMIAL_LABELS:
+            return PolyOpEx._MONOMIAL_LABELS[key]
+        # General case
+        x_part = f'x^{a}' if a > 1 else ('x' if a == 1 else '')
+        p_part = f'p^{b}' if b > 1 else ('p' if b == 1 else '')
+        inner = x_part + p_part
+        if a > 0 and b > 0:
+            return f'Sym({inner})'
+        return inner
+
+    def graded_str(self, subs=None, numerical=False):
+        """Pretty-print the graded decomposition.
+
+        Parameters
+        ----------
+        subs : list of (symbol, value) pairs, optional
+            Substitutions applied before display (e.g., [(hbar, 1)]).
+        numerical : bool
+            If True, convert coefficients to complex floats after substitution.
+            Requires that all symbols are substituted.
+
+        Returns
+        -------
+        str : multi-line string showing each grade and its monomials.
+        """
+        grades = self.by_grade()
+        lines = []
+        for n in sorted(grades):
+            label = self._GRADE_LABELS.get(n, f'grade {n}')
+            lines.append(f'Grade {n} ({label}):')
+            comp = grades[n]
+            for (a, b) in sorted(comp.coeffs):
+                c = comp.coeffs[(a, b)]
+                if subs:
+                    c = sy.simplify(c).subs(subs)
+                if numerical:
+                    c = complex(c)
+                    c_str = f'{c.real:+.6e} {c.imag:+.6e}i'
+                else:
+                    c_str = str(c)
+                ml = self._monomial_label(a, b)
+                po = comp._pert_order.get((a, b), 0)
+                po_str = f'  [O({po})]' if po > 0 else ''
+                lines.append(f'    {ml:>16s} : {c_str}{po_str}')
+        return '\n'.join(lines)
+
     # --- display ------------------------------------------------------------
 
     def __repr__(self):
