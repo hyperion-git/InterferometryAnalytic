@@ -972,70 +972,123 @@ def _compute_bch_words(max_order, n_random=50):
                     entries.append((ws, c))
             return nz, entries, set(pivots)
 
-        best_nz = nc + 1
-        best_entries = []
-        best_pivots = set()
+        # Build numpy float matrix for fast operations
+        import numpy as _np
+        _Mnp = _np.array([[float(v) for v in row] for row in Mf], dtype=_np.float64)
 
-        # Try deterministic orderings
+        # Build overcomplete coefficient vector (float)
+        oc_vec = _np.array([float(oc.get(all_words[j], Fraction(0)))
+                            for j in range(nc)], dtype=_np.float64)
+
+        def _try_basis_np(col_order):
+            """Fast numpy GE → pivot columns + estimated sparsity.
+            Uses first-nonzero pivoting to match Fraction _try_basis behavior."""
+            aug = _Mnp[:, col_order].copy()
+            pivots = []
+            row = 0
+            eps = 1e-12
+            for ci, c in enumerate(col_order):
+                # Find first non-zero pivot (matching Fraction behavior)
+                p = None
+                for r in range(row, nr):
+                    if abs(aug[r, ci]) > eps:
+                        p = r
+                        break
+                if p is None:
+                    continue
+                aug[[row, p]] = aug[[p, row]]
+                pivots.append(c)
+                piv_val = aug[row, ci]
+                aug[row] /= piv_val
+                for r in range(nr):
+                    if r != row and abs(aug[r, ci]) > eps:
+                        aug[r] -= aug[r, ci] * aug[row]
+                row += 1
+            # Estimate sparsity: consolidate oc onto basis
+            pr = {c: i for i, c in enumerate(pivots)}
+            bc = _np.zeros(nc, dtype=_np.float64)
+            inv_col = [None] * nc
+            for ci, c in enumerate(col_order):
+                inv_col[c] = ci
+            for j in range(nc):
+                v = oc_vec[j]
+                if abs(v) < 1e-30:
+                    continue
+                if j in pr:
+                    bc[j] += v
+                else:
+                    ci = inv_col[j]
+                    for p in pivots:
+                        coeff = aug[pr[p], ci]
+                        if abs(coeff) > eps:
+                            bc[p] += v * coeff
+            nz = int(_np.sum(_np.abs(bc) > eps))
+            return nz, set(pivots)
+
+        best_nz_np = nc + 1
+        best_pivots_np = set()
+        # Track top candidates by numpy-estimated sparsity
+        candidates = []  # (nz_estimate, pivots)
+
+        # Try deterministic orderings (numpy-fast)
         for col_order in [list(range(nc)),
                           list(range(nc - 1, -1, -1)),
-                          sorted(range(nc), key=lambda j: abs(
-                              oc.get(all_words[j], Fraction(0))))]:
-            nz, ent, piv = _try_basis(col_order)
-            if nz < best_nz:
-                best_nz, best_entries, best_pivots = nz, ent, piv
+                          sorted(range(nc), key=lambda j: abs(oc_vec[j]))]:
+            nz, piv = _try_basis_np(col_order)
+            candidates.append((nz, piv))
+            if nz < best_nz_np:
+                best_nz_np, best_pivots_np = nz, piv
 
-        # Try random orderings (deterministic seed for reproducibility)
+        # Try random orderings (numpy-fast)
         rng = _random.Random(order * 12345)
         for _ in range(n_random):
             col_order = list(range(nc))
             rng.shuffle(col_order)
-            nz, ent, piv = _try_basis(col_order)
-            if nz < best_nz:
-                best_nz, best_entries, best_pivots = nz, ent, piv
+            nz, piv = _try_basis_np(col_order)
+            candidates.append((nz, piv))
+            if nz < best_nz_np:
+                best_nz_np, best_pivots_np = nz, piv
 
-        # Swap refinement: try replacing each basis word with each non-basis word
-        rank = len(best_pivots)
+        # Swap refinement using numpy
+        rank = len(best_pivots_np)
         improved = True
         while improved:
             improved = False
             for np_col in range(nc):
-                if np_col in best_pivots:
+                if np_col in best_pivots_np:
                     continue
-                for p_col in sorted(best_pivots):
-                    trial = (best_pivots - {p_col}) | {np_col}
-                    tl = sorted(trial)
-                    # Check if trial set has full rank
-                    sub = [[Mf[i][j] for j in tl] for i in range(nr)]
-                    r2 = 0
-                    for c in range(rank):
-                        pp = None
-                        for r in range(r2, nr):
-                            if sub[r][c]:
-                                pp = r
-                                break
-                        if pp is None:
-                            break
-                        sub[r2], sub[pp] = sub[pp], sub[r2]
-                        s = sub[r2][c]
-                        for c2 in range(rank):
-                            sub[r2][c2] /= s
-                        for r in range(nr):
-                            if r != r2 and sub[r][c]:
-                                f = sub[r][c]
-                                for c2 in range(rank):
-                                    sub[r][c2] -= f * sub[r2][c2]
-                        r2 += 1
-                    if r2 < rank:
+                for p_col in sorted(best_pivots_np):
+                    trial = (best_pivots_np - {p_col}) | {np_col}
+                    cols = sorted(trial)
+                    if _np.linalg.matrix_rank(_Mnp[:, cols]) < rank:
                         continue
+                    tl = cols
                     col_order = tl + [j for j in range(nc) if j not in trial]
-                    nz, ent, piv = _try_basis(col_order)
-                    if nz < best_nz:
-                        best_nz, best_entries, best_pivots = nz, ent, piv
+                    nz, piv = _try_basis_np(col_order)
+                    if nz < best_nz_np:
+                        best_nz_np, best_pivots_np = nz, piv
+                        candidates.append((nz, piv))
                         improved = True
-                        break
-                if improved:
-                    break
+
+        # Exact Fraction evaluation of top candidates only
+        # Sort by numpy estimate and evaluate best unique pivot sets
+        candidates.sort(key=lambda x: x[0])
+        seen = set()
+        best_nz = nc + 1
+        best_entries = []
+        best_pivots = set()
+        for nz_est, piv in candidates:
+            if nz_est > best_nz + 2:  # prune: can't beat best by much
+                break
+            key = frozenset(piv)
+            if key in seen:
+                continue
+            seen.add(key)
+            tl = sorted(piv)
+            col_order = tl + [j for j in range(nc) if j not in piv]
+            nz, ent, pivots = _try_basis(col_order)
+            if nz < best_nz:
+                best_nz, best_entries, best_pivots = nz, ent, pivots
 
         if best_entries:
             bch_table[order] = best_entries
@@ -1139,47 +1192,43 @@ _BCH_TABLE = {
         ('yyyyyxxxy', Fraction(-1, 113400)),
         ('yyyyyyxxy', Fraction(1, 302400)),
         ('yyyyyyyxy', Fraction(1, 1209600))],
-    10: [('xxxyyyyyxy', Fraction(-73, 3628800)),
-         ('xxyxyyyyxy', Fraction(1, 16800)),
-         ('xxyyxyyyxy', Fraction(-1, 20160)),
-         ('xyxyyyyxxy', Fraction(1, 40320)),
-         ('xyyxyxyyxy', Fraction(1, 120960)),
-         ('xyyxyyyxxy', Fraction(-1, 48384)),
-         ('xyyyyxxyxy', Fraction(1, 80640)),
-         ('xyyyyyxxxy', Fraction(-1, 226800)),
+    10: [('xxxxxyyyxy', Fraction(-1, 403200)),
+         ('xxxxyyyyxy', Fraction(1, 403200)),
+         ('xxxyxxyyxy', Fraction(1, 36288)),
+         ('xxxyxyxyxy', Fraction(-1, 17280)),
+         ('xxxyyxxyxy', Fraction(11, 241920)),
+         ('xxxyyyyyxy', Fraction(11, 907200)),
+         ('xxyxxyyyxy', Fraction(-1, 40320)),
+         ('xxyxyxyyxy', Fraction(1, 30240)),
+         ('xxyxyyxxxy', Fraction(-1, 30240)),
+         ('xxyxyyyyxy', Fraction(-1, 37800)),
+         ('xxyyxyxyxy', Fraction(-1, 20160)),
+         ('xxyyxyyyxy', Fraction(1, 241920)),
+         ('xxyyyxxyxy', Fraction(1, 60480)),
+         ('xxyyyyyyxy', Fraction(-1, 604800)),
+         ('xyxxxxyyxy', Fraction(-1, 241920)),
+         ('xyxxxyyyxy', Fraction(1, 48384)),
+         ('xyxxyxxyxy', Fraction(1, 40320)),
+         ('xyxxyxyyxy', Fraction(-1, 30240)),
+         ('xyxxyyyyxy', Fraction(-1, 100800)),
+         ('xyxyxyxyxy', Fraction(1, 12096)),
+         ('xyxyxyyyxy', Fraction(1, 20160)),
+         ('xyxyyxxxxy', Fraction(1, 80640)),
+         ('xyxyyxxyxy', Fraction(-1, 40320)),
+         ('xyxyyxyyxy', Fraction(-1, 60480)),
+         ('xyxyyyyyxy', Fraction(1, 302400)),
+         ('xyyxxyxyxy', Fraction(-1, 40320)),
+         ('xyyxxyyyxy', Fraction(-1, 40320)),
+         ('xyyxyxxyxy', Fraction(1, 60480)),
+         ('xyyxyxyyxy', Fraction(1, 60480)),
+         ('xyyyxxxxxy', Fraction(-1, 403200)),
+         ('xyyyxxyyxy', Fraction(1, 181440)),
+         ('xyyyyyxyxy', Fraction(1, 604800)),
+         ('xyyyyyyyxy', Fraction(1, 2419200)),
          ('yxxxxxxxxy', Fraction(1, 2419200)),
-         ('yxxxxxxyxy', Fraction(1, 86400)),
-         ('yxxxxxyyxy', Fraction(1, 1814400)),
-         ('yxxxxyxxxy', Fraction(-1, 60480)),
-         ('yxxxxyyyxy', Fraction(1, 241920)),
-         ('yxxyxxxxxy', Fraction(1, 100800)),
-         ('yxxyxxyxxy', Fraction(1, 120960)),
-         ('yxxyxxyyxy', Fraction(-1, 60480)),
-         ('yxxyyxxxxy', Fraction(-1, 120960)),
-         ('yxyxxxxyxy', Fraction(-1, 40320)),
-         ('yxyxxyxxxy', Fraction(1, 20160)),
-         ('yxyxxyyxxy', Fraction(1, 20160)),
-         ('yxyyxxxxxy', Fraction(-1, 201600)),
-         ('yxyyxyyyxy', Fraction(1, 120960)),
-         ('yxyyyyxyxy', Fraction(1, 302400)),
-         ('yxyyyyyyxy', Fraction(1, 604800)),
-         ('yyxxxxxxxy', Fraction(-1, 604800)),
-         ('yyxxxyxyxy', Fraction(-1, 60480)),
-         ('yyxxyxxxxy', Fraction(-1, 80640)),
-         ('yyxyxxxyxy', Fraction(-1, 60480)),
-         ('yyxyxyyyxy', Fraction(-1, 100800)),
-         ('yyxyyxxxxy', Fraction(1, 120960)),
-         ('yyxyyyyxxy', Fraction(-1, 201600)),
-         ('yyyxxxxxxy', Fraction(1, 453600)),
-         ('yyyxxyxxxy', Fraction(1, 60480)),
-         ('yyyxyxxxxy', Fraction(-1, 60480)),
-         ('yyyxyxyyxy', Fraction(1, 100800)),
-         ('yyyxyyxyxy', Fraction(-1, 604800)),
-         ('yyyxyyyyxy', Fraction(-1, 172800)),
-         ('yyyyxxxxxy', Fraction(1, 403200)),
-         ('yyyyxxyyxy', Fraction(-1, 604800)),
-         ('yyyyxyyyxy', Fraction(1, 172800)),
-         ('yyyyyyxyxy', Fraction(-1, 806400))],
+         ('yxxxxxxyxy', Fraction(1, 604800)),
+         ('yxyxxxxxxy', Fraction(1, 302400)),
+         ('yyxxxxxxxy', Fraction(-1, 604800))],
 }
 
 
